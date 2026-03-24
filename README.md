@@ -8,6 +8,8 @@ Python SDK for **Agent Veil Protocol** — the trust and identity layer for AI a
 >
 > [AVP Protocol Specification v1.0](docs/SPEC.md) — identity, reputation, sybil resistance, attestation disputes, audit trail.
 
+[![AgentVeil Protocol MCP server](https://glama.ai/mcp/servers/creatorrmode-lead/avp-sdk/badges/card.svg)](https://glama.ai/mcp/servers/creatorrmode-lead/avp-sdk)
+
 ---
 
 ## Install
