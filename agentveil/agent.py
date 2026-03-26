@@ -371,6 +371,99 @@ class AVPAgent:
             r = c.get(f"/v1/reputation/{target}")
             return self._handle_response(r)
 
+    def get_reputation_credential(
+        self,
+        did: Optional[str] = None,
+        risk_level: str = "medium",
+    ) -> dict:
+        """
+        Get a signed reputation credential for offline verification.
+
+        The credential is signed by the AVP server's Ed25519 key and contains
+        the agent's score, confidence, and an expiration time based on risk_level.
+
+        Args:
+            did: Agent DID (defaults to self)
+            risk_level: "low" (60min TTL), "medium" (15min), "high" (5min).
+                        "critical" is rejected — use get_reputation() instead.
+
+        Returns:
+            dict with did, score, confidence, issued_at, expires_at,
+            ipfs_cid, risk_level, signature, signer_did
+        """
+        if risk_level not in ("low", "medium", "high", "critical"):
+            raise AVPValidationError(
+                f"Invalid risk_level: {risk_level}. Must be low/medium/high/critical"
+            )
+        target = did or self._did
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.get(
+                f"/v1/reputation/{target}/credential",
+                params={"risk_level": risk_level},
+            )
+            return self._handle_response(r)
+
+    @staticmethod
+    def verify_credential(credential: dict) -> bool:
+        """
+        Verify a reputation credential offline — no API call needed.
+
+        Checks:
+        1. Ed25519 signature is valid (signer_did → public key → verify)
+        2. Credential has not expired (expires_at > now)
+        3. DID field is present and non-empty
+
+        Args:
+            credential: The credential dict from get_reputation_credential()
+
+        Returns:
+            True if the credential is valid and not expired
+        """
+        import base58
+        from datetime import datetime, timezone
+
+        try:
+            # Check required fields
+            for field in ("did", "score", "confidence", "issued_at", "expires_at",
+                          "risk_level", "signature", "signer_did"):
+                if field not in credential:
+                    return False
+
+            # Check not expired
+            expires_at = datetime.strptime(
+                credential["expires_at"], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return False
+
+            # Extract public key from signer_did
+            signer_did = credential["signer_did"]
+            if not signer_did.startswith("did:key:z"):
+                return False
+            decoded = base58.b58decode(signer_did[9:])
+            if len(decoded) < 2 or decoded[0] != 0xED or decoded[1] != 0x01:
+                return False
+            public_key = decoded[2:]
+            if len(public_key) != 32:
+                return False
+
+            # Reconstruct the signed payload
+            payload = {
+                k: v for k, v in credential.items()
+                if k not in ("signature", "signer_did")
+            }
+            message = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode()
+
+            # Verify Ed25519 signature
+            signature = bytes.fromhex(credential["signature"])
+            verify_key = VerifyKey(public_key)
+            verify_key.verify(message, signature)
+            return True
+        except Exception:
+            return False
+
     def get_agent_info(self, did: Optional[str] = None) -> dict:
         """Get public info about an agent."""
         target = did or self._did
