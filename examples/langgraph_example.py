@@ -1,18 +1,23 @@
 """
-LangGraph + Agent Veil Protocol integration example.
+LangGraph + Agent Veil Protocol — E2E example.
 
-Shows how to:
-    1. Use AVP reputation tools in a LangGraph workflow
-    2. Check reputation before delegating tasks
-    3. Log interaction results as attestations
-    4. Build a ToolNode with AVP tools
+A tool-calling agent that uses AVP reputation tools inside a LangGraph
+StateGraph to verify another agent before delegating work.
 
 Prerequisites:
-    pip install agentveil langchain-core langgraph
+    pip install agentveil langgraph langchain-openai langchain-core
+    export OPENAI_API_KEY="sk-..."
 
 Usage:
     python examples/langgraph_example.py
 """
+
+import os
+import sys
+
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_openai import ChatOpenAI
 
 from agentveil import AVPAgent
 from agentveil.tools.langgraph import (
@@ -26,10 +31,14 @@ AVP_URL = "https://agentveil.dev"
 
 
 def main():
-    # === Step 1: Configure AVP tools ===
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("ERROR: Set OPENAI_API_KEY environment variable.")
+        print("  export OPENAI_API_KEY='sk-...'")
+        sys.exit(1)
+
+    # === Step 1: Configure AVP and register agents ===
     configure(base_url=AVP_URL, agent_name="langgraph_researcher")
 
-    # === Step 2: Register AVP agents ===
     print("=== Registering agents on AVP ===")
 
     researcher = AVPAgent.create(AVP_URL, name="langgraph_researcher")
@@ -38,51 +47,52 @@ def main():
 
     writer = AVPAgent.create(AVP_URL, name="langgraph_writer")
     writer.register(display_name="LangGraph Writer")
-    writer.publish_card(capabilities=["writing", "editing"], provider="anthropic")
+    writer.publish_card(capabilities=["writing", "editing"], provider="openai")
 
-    print(f"Researcher: {researcher.did[:40]}...")
-    print(f"Writer:     {writer.did[:40]}...")
+    print(f"  Researcher DID: {researcher.did[:40]}...")
+    print(f"  Writer DID:     {writer.did[:40]}...")
 
-    # === Step 3: Use tools directly ===
-    print("\n=== Checking writer reputation ===")
-    rep_result = avp_check_reputation.invoke({"did": writer.did})
-    print(f"Reputation: {rep_result}")
+    # === Step 2: Build LangGraph with AVP tools ===
+    tools = [avp_check_reputation, avp_should_delegate, avp_log_interaction]
 
-    print("\n=== Delegation decision ===")
-    del_result = avp_should_delegate.invoke({"did": writer.did, "min_score": 0.3})
-    print(f"Decision: {del_result}")
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm_with_tools = llm.bind_tools(tools)
 
-    print("\n=== Logging interaction ===")
-    att_result = avp_log_interaction.invoke({
-        "did": writer.did,
-        "outcome": "positive",
-        "context": "research_task",
-    })
-    print(f"Attestation: {att_result}")
+    def agent_node(state: MessagesState):
+        return {"messages": [llm_with_tools.invoke(state["messages"])]}
 
-    # === Step 4: Check updated reputation ===
+    graph = StateGraph(MessagesState)
+    graph.add_node("agent", agent_node)
+    graph.add_node("tools", ToolNode(tools))
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", tools_condition)
+    graph.add_edge("tools", "agent")
+
+    app = graph.compile()
+
+    # === Step 3: Run the agent ===
+    print("\n=== Running LangGraph agent ===\n")
+
+    query = (
+        f"I need to delegate a research task to the agent with DID '{writer.did}'. "
+        "First check their reputation using check_avp_reputation, then decide "
+        "whether to delegate using should_delegate with a minimum score of 0.3. "
+        "If approved, log a positive interaction using log_avp_interaction. "
+        "Give me a summary of what you found."
+    )
+
+    result = app.invoke({"messages": [("user", query)]})
+
+    # Print the final response
+    print("=== Agent response ===")
+    print(result["messages"][-1].content)
+
+    # === Step 4: Verify reputation changed ===
     print("\n=== Updated reputation ===")
     rep = researcher.get_reputation(writer.did)
-    print(f"Writer: score={rep['score']:.3f}, confidence={rep['confidence']:.3f}")
+    print(f"  Writer: score={rep['score']:.3f}, confidence={rep['confidence']:.3f}")
 
-    # === Step 5: LangGraph workflow setup (requires LLM API key) ===
-    print("\n=== LangGraph workflow setup (requires OPENAI_API_KEY) ===")
-    print("""
-    # To run with actual LangGraph:
-    #
-    # from langgraph.prebuilt import ToolNode
-    # from langgraph.graph import StateGraph, MessagesState
-    #
-    # tools = [avp_check_reputation, avp_should_delegate, avp_log_interaction]
-    # tool_node = ToolNode(tools)
-    #
-    # workflow = StateGraph(MessagesState)
-    # workflow.add_node("tools", tool_node)
-    # # ... add LLM node, edges, etc.
-    # graph = workflow.compile()
-    """)
-
-    print("=== Done ===")
+    print("\n=== Done ===")
 
 
 if __name__ == "__main__":
