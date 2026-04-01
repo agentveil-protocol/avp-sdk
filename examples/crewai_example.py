@@ -1,111 +1,136 @@
 """
-CrewAI + Agent Veil Protocol integration example.
+CrewAI + Agent Veil Protocol — E2E example.
 
-Shows how to:
-    1. Give CrewAI agents AVP reputation tools
-    2. Check reputation before delegating tasks
-    3. Log interaction results as attestations
-    4. Wrap agent functions with @avp_tracked
+A research crew where agents check each other's reputation before
+delegating work and log interaction results as attestations.
 
 Prerequisites:
     pip install agentveil crewai
+    export OPENAI_API_KEY="sk-..."
 
 Usage:
     python examples/crewai_example.py
 """
 
+import os
+import sys
+
+from crewai import Agent, Task, Crew, Process
+
 from agentveil import AVPAgent
-from agentveil.tools.crewai import AVPReputationTool, AVPDelegationTool, AVPAttestationTool
+from agentveil.tools.crewai import (
+    AVPReputationTool,
+    AVPDelegationTool,
+    AVPAttestationTool,
+)
 
 AVP_URL = "https://agentveil.dev"
 
 
 def main():
-    # === Step 1: Register AVP agents ===
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("ERROR: Set OPENAI_API_KEY environment variable.")
+        print("  export OPENAI_API_KEY='sk-...'")
+        sys.exit(1)
+
+    # === Step 1: Register AVP identities ===
     print("=== Registering agents on AVP ===")
 
-    researcher = AVPAgent.create(AVP_URL, name="crewai_researcher")
-    researcher.register(display_name="CrewAI Researcher")
-    researcher.publish_card(capabilities=["research", "analysis"], provider="openai")
+    researcher_avp = AVPAgent.create(AVP_URL, name="crewai_researcher")
+    researcher_avp.register(display_name="CrewAI Researcher")
+    researcher_avp.publish_card(capabilities=["research", "analysis"], provider="openai")
 
-    writer = AVPAgent.create(AVP_URL, name="crewai_writer")
-    writer.register(display_name="CrewAI Writer")
-    writer.publish_card(capabilities=["writing", "editing"], provider="anthropic")
+    writer_avp = AVPAgent.create(AVP_URL, name="crewai_writer")
+    writer_avp.register(display_name="CrewAI Writer")
+    writer_avp.publish_card(capabilities=["writing", "editing"], provider="openai")
 
-    reviewer = AVPAgent.create(AVP_URL, name="crewai_reviewer")
-    reviewer.register(display_name="CrewAI Reviewer")
-    reviewer.publish_card(capabilities=["code_review", "quality_assurance"], provider="openai")
-
-    print(f"Researcher: {researcher.did[:40]}...")
-    print(f"Writer:     {writer.did[:40]}...")
-    print(f"Reviewer:   {reviewer.did[:40]}...")
+    print(f"  Researcher DID: {researcher_avp.did[:40]}...")
+    print(f"  Writer DID:     {writer_avp.did[:40]}...")
 
     # === Step 2: Create AVP tools ===
-    print("\n=== Creating AVP tools ===")
+    avp_tools = [
+        AVPReputationTool(base_url=AVP_URL, agent_name="crewai_researcher"),
+        AVPDelegationTool(base_url=AVP_URL, agent_name="crewai_researcher"),
+        AVPAttestationTool(base_url=AVP_URL, agent_name="crewai_researcher"),
+    ]
 
-    rep_tool = AVPReputationTool(base_url=AVP_URL, agent_name="crewai_researcher")
-    del_tool = AVPDelegationTool(base_url=AVP_URL, agent_name="crewai_researcher")
+    # === Step 3: Define CrewAI agents with AVP tools ===
+    researcher = Agent(
+        role="Research Analyst",
+        goal=(
+            "Find information about AI agent trust and verify collaborators "
+            "using Agent Veil Protocol reputation tools"
+        ),
+        backstory=(
+            "You are an expert researcher who always checks the reputation "
+            "of other agents before collaborating. You have access to AVP tools "
+            "to check reputation scores, make delegation decisions, and log "
+            "interaction outcomes."
+        ),
+        tools=avp_tools,
+        verbose=True,
+    )
+
+    writer = Agent(
+        role="Technical Writer",
+        goal="Write a clear summary based on research findings",
+        backstory=(
+            "You are a skilled technical writer who produces concise, "
+            "well-structured reports."
+        ),
+        verbose=True,
+    )
+
+    # === Step 4: Define tasks ===
+    research_task = Task(
+        description=(
+            f"Check the reputation of the agent with DID '{writer_avp.did}' "
+            "using the check_avp_reputation tool. Then decide whether to delegate "
+            "work to this agent using should_delegate_to_agent with a minimum "
+            "score of 0.3. Report your findings about the agent's trustworthiness."
+        ),
+        expected_output=(
+            "A short report containing: the agent's reputation score, "
+            "confidence level, and your delegation decision with reasoning."
+        ),
+        agent=researcher,
+    )
+
+    writing_task = Task(
+        description=(
+            "Based on the research findings about AI agent trust verification, "
+            "write a brief summary (3-5 sentences) explaining how Agent Veil "
+            "Protocol helps agents verify each other's trustworthiness."
+        ),
+        expected_output="A concise paragraph about AVP trust verification.",
+        agent=writer,
+        context=[research_task],
+    )
+
+    # === Step 5: Run the crew ===
+    print("\n=== Running CrewAI crew ===\n")
+
+    crew = Crew(
+        agents=[researcher, writer],
+        tasks=[research_task, writing_task],
+        process=Process.sequential,
+        verbose=True,
+    )
+
+    result = crew.kickoff()
+
+    print("\n=== Crew result ===")
+    print(result)
+
+    # === Step 6: Log the interaction ===
+    print("\n=== Logging interaction on AVP ===")
     att_tool = AVPAttestationTool(base_url=AVP_URL, agent_name="crewai_researcher")
+    att_result = att_tool._run(
+        did=writer_avp.did, outcome="positive", context="crewai_research_task"
+    )
+    print(f"Attestation recorded: {att_result}")
 
-    print("Tools ready: check_avp_reputation, should_delegate_to_agent, log_avp_interaction")
-
-    # === Step 3: Check reputation before delegation ===
-    print("\n=== Checking writer reputation ===")
-    rep_result = rep_tool._run(did=writer.did)
-    print(f"Reputation: {rep_result}")
-
-    # === Step 4: Decide on delegation ===
-    print("\n=== Delegation decision ===")
-    del_result = del_tool._run(did=writer.did, min_score=0.3)
-    print(f"Decision: {del_result}")
-
-    # === Step 5: Log interaction after task ===
-    print("\n=== Logging interactions ===")
-
-    # Researcher attests writer (positive)
-    att_result = att_tool._run(did=writer.did, outcome="positive", context="research_task")
-    print(f"Researcher -> Writer: {att_result}")
-
-    # Writer attests reviewer (positive)
-    att_tool_writer = AVPAttestationTool(base_url=AVP_URL, agent_name="crewai_writer")
-    att_result2 = att_tool_writer._run(did=reviewer.did, outcome="positive", context="editing_task")
-    print(f"Writer -> Reviewer: {att_result2}")
-
-    # === Step 6: Check updated reputations ===
-    print("\n=== Updated reputations ===")
-    for name, agent in [("Researcher", researcher), ("Writer", writer), ("Reviewer", reviewer)]:
-        rep = researcher.get_reputation(agent.did)
-        print(f"{name}: score={rep['score']:.3f}, confidence={rep['confidence']:.3f}")
-
-    # === Step 7: Use with CrewAI Crew (requires LLM API key) ===
-    print("\n=== CrewAI Crew setup (requires OPENAI_API_KEY) ===")
-    print("""
-    # To run with actual CrewAI agents:
-    #
-    # from crewai import Agent, Task, Crew
-    #
-    # researcher_agent = Agent(
-    #     role="Research Analyst",
-    #     goal="Find and verify information",
-    #     backstory="Expert researcher with reputation awareness",
-    #     tools=[
-    #         AVPReputationTool(base_url=AVP_URL),
-    #         AVPDelegationTool(base_url=AVP_URL),
-    #         AVPAttestationTool(base_url=AVP_URL),
-    #     ],
-    # )
-    #
-    # task = Task(
-    #     description="Research AI agent trust and check collaborator reputation",
-    #     expected_output="Research report with trust verification",
-    #     agent=researcher_agent,
-    # )
-    #
-    # crew = Crew(agents=[researcher_agent], tasks=[task])
-    # result = crew.kickoff()
-    """)
-
-    print("=== Done ===")
+    print("\n=== Done ===")
 
 
 if __name__ == "__main__":
