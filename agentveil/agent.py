@@ -73,6 +73,13 @@ class AVPAgent:
         self._name = name
         self._timeout = timeout
 
+        # Warn if using unencrypted HTTP for non-localhost connections
+        if self._base_url.startswith("http://") and "localhost" not in self._base_url and "127.0.0.1" not in self._base_url:
+            log.warning(
+                "Using HTTP without TLS. Signatures and keys may be intercepted. "
+                "Use https:// in production."
+            )
+
         # Derive public key and DID
         signing_key = SigningKey(private_key)
         self._public_key = bytes(signing_key.verify_key)
@@ -109,16 +116,18 @@ class AVPAgent:
         return agent
 
     @classmethod
-    def load(cls, base_url: str, name: str = "agent") -> "AVPAgent":
+    def load(cls, base_url: str, name: str = "agent", passphrase: Optional[str] = None) -> "AVPAgent":
         """
         Load agent from saved keys.
 
         Args:
             base_url: AVP server URL
             name: Agent name (matches saved file)
+            passphrase: Required if the saved file was encrypted with a passphrase
 
         Raises:
             FileNotFoundError: If no saved agent with this name
+            ValueError: If file is encrypted but no passphrase provided
         """
         path = os.path.join(AGENTS_DIR, f"{name}.json")
         if not os.path.exists(path):
@@ -127,7 +136,28 @@ class AVPAgent:
         with open(path) as f:
             data = json.load(f)
 
-        private_key = bytes.fromhex(data["private_key_hex"])
+        if data.get("encrypted"):
+            if not passphrase:
+                raise ValueError(
+                    f"Agent '{name}' is encrypted. Provide passphrase to load."
+                )
+            from nacl.pwhash import argon2id
+            from nacl.secret import SecretBox
+
+            salt = bytes.fromhex(data["encryption_salt"])
+            key = argon2id.kdf(
+                SecretBox.KEY_SIZE,
+                passphrase.encode(),
+                salt,
+                opslimit=argon2id.OPSLIMIT_MODERATE,
+                memlimit=argon2id.MEMLIMIT_MODERATE,
+            )
+            box = SecretBox(key)
+            encrypted = bytes.fromhex(data["private_key_encrypted"])
+            private_key = bytes(box.decrypt(encrypted))
+        else:
+            private_key = bytes.fromhex(data["private_key_hex"])
+
         agent = cls(base_url, private_key, name=name)
         agent._is_registered = data.get("registered", False)
         agent._is_verified = data.get("verified", False)
@@ -161,20 +191,54 @@ class AVPAgent:
 
     # === Key management ===
 
-    def save(self) -> str:
-        """Save agent keys to disk. Returns file path."""
+    def save(self, passphrase: Optional[str] = None) -> str:
+        """
+        Save agent keys to disk. Returns file path.
+
+        Args:
+            passphrase: If provided, encrypts the private key using NaCl SecretBox
+                        with a key derived from the passphrase via scrypt.
+                        If None, private key is stored as plaintext hex (0o600 permissions).
+        """
         os.makedirs(AGENTS_DIR, exist_ok=True)
         path = os.path.join(AGENTS_DIR, f"{self._name}.json")
+
+        data = {
+            "name": self._name,
+            "did": self._did,
+            "public_key_hex": self._public_key.hex(),
+            "registered": self._is_registered,
+            "verified": self._is_verified,
+            "base_url": self._base_url,
+        }
+
+        if passphrase:
+            from nacl.pwhash import argon2id
+            from nacl.secret import SecretBox
+            from nacl.utils import random as nacl_random
+
+            salt = nacl_random(argon2id.SALTBYTES)
+            key = argon2id.kdf(
+                SecretBox.KEY_SIZE,
+                passphrase.encode(),
+                salt,
+                opslimit=argon2id.OPSLIMIT_MODERATE,
+                memlimit=argon2id.MEMLIMIT_MODERATE,
+            )
+            box = SecretBox(key)
+            encrypted = box.encrypt(self._private_key)
+            data["private_key_encrypted"] = encrypted.hex()
+            data["encryption_salt"] = salt.hex()
+            data["encrypted"] = True
+        else:
+            data["private_key_hex"] = self._private_key.hex()
+            data["encrypted"] = False
+            log.warning(
+                "Saving private key unencrypted. Use save(passphrase='...') for encrypted storage."
+            )
+
         with open(path, "w") as f:
-            json.dump({
-                "name": self._name,
-                "did": self._did,
-                "public_key_hex": self._public_key.hex(),
-                "private_key_hex": self._private_key.hex(),
-                "registered": self._is_registered,
-                "verified": self._is_verified,
-                "base_url": self._base_url,
-            }, f, indent=2)
+            json.dump(data, f, indent=2)
         os.chmod(path, 0o600)  # Owner read/write only
         return path
 
