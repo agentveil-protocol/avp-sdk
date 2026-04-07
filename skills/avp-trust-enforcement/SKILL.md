@@ -7,7 +7,7 @@ description: >
   which provides 11 tools for identity, reputation, attestations, and discovery.
   Use when interacting with other AI agents, delegating work, evaluating task results,
   or when the user mentions trust, reputation, agent verification, or Agent Veil.
-version: 1.0.0
+version: 1.1.0
 author: Agent Veil Protocol
 license: MIT
 metadata:
@@ -17,6 +17,19 @@ metadata:
     category: agent-infrastructure
     fallback_for_toolsets: []
     requires_toolsets: [mcp]
+    config:
+      - key: avp.base_url
+        description: AVP API endpoint URL
+        default: "https://agentveil.dev"
+        prompt: AVP API base URL
+      - key: avp.min_trust_score
+        description: Minimum trust score threshold for delegation decisions
+        default: "0.5"
+        prompt: Minimum trust score for delegation
+      - key: avp.agent_name
+        description: Default agent display name used when registering on AVP
+        default: "hermes-agent"
+        prompt: Agent display name for AVP registration
 ---
 
 # Agent Veil Protocol — Trust Enforcement
@@ -39,6 +52,23 @@ AVP MCP server is connected, you have direct access to all tools below.
 
 Do NOT use for tasks unrelated to agent identity, trust, or multi-agent coordination.
 
+## Configuration
+
+Configured via `skills.config.avp.*` in `~/.hermes/config.yaml` (prompted
+during `hermes config migrate` or `hermes setup`):
+
+```yaml
+skills:
+  config:
+    avp:
+      base_url: https://agentveil.dev
+      min_trust_score: "0.5"
+      agent_name: hermes-agent
+```
+
+The resolved values are injected when this skill loads — check the
+`[Skill config: ...]` block above for active values.
+
 ## Prerequisites
 
 - AVP MCP server connected. Configure in your MCP settings:
@@ -53,6 +83,7 @@ Do NOT use for tasks unrelated to agent identity, trust, or multi-agent coordina
     }
   }
   ```
+  The `AVP_BASE_URL` should match `skills.config.avp.base_url` from your config.
 - Or install: `pip install agentveil mcp` and run `python -m mcp_server.server`
 
 ## Available MCP Tools
@@ -82,14 +113,14 @@ Do NOT use for tasks unrelated to agent identity, trust, or multi-agent coordina
 
 ### 1. First-Time Setup (One-Time)
 
-Register your agent identity on AVP:
+Register your agent identity on AVP (uses `avp.agent_name` from config):
 
 ```
 register_agent(display_name="hermes-agent")
 ```
 
 This generates Ed25519 keys, creates a `did:key:z6Mk...` identity, and saves
-credentials to `~/.avp/agents/hermes-agent.json`. You only do this once.
+credentials to `~/.avp/agents/<agent_name>.json`. You only do this once.
 
 Then publish your capabilities so other agents can find you:
 
@@ -111,9 +142,10 @@ Response includes:
 - `interpretation` — human-readable label (e.g. "trusted", "new", "untrusted")
 - `total_attestations` — number of peer reviews received
 
-**Decision rule:** Delegate only if `score >= 0.5` AND `confidence > 0.1`. If the
-agent is new (score ~0.34, low confidence), assign a low-risk task first and attest
-the result to build their reputation.
+**Decision rule:** Delegate only if `score >= min_trust_score` (default 0.5, see
+`[Skill config]` above) AND `confidence > 0.1`. If the agent is new (score ~0.34,
+low confidence), assign a low-risk task first and attest the result to build their
+reputation.
 
 ### 3. Submit Attestation After Interaction
 
