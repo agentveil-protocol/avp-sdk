@@ -9,8 +9,20 @@ Python SDK for **Agent Veil Protocol** — trust enforcement for autonomous agen
 > [Why agent trust infrastructure matters](docs/SECURITY_CONTEXT.md) — verified CVEs, market data, and the structural problem AVP addresses.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="AVP SDK Demo — agent identity, attestation, sybil detection" width="720">
+  <img src="docs/demo.gif" alt="AVP SDK Demo — identity, attestation, trust decisions, sybil resistance" width="720">
 </p>
+
+```python
+from agentveil import AVPAgent
+
+agent = AVPAgent.load("https://agentveil.dev", "my-agent")
+
+# Should I trust this agent with my task?
+decision = agent.can_trust("did:key:z6Mk...", min_tier="trusted")
+if decision["allowed"]:
+    delegate_task()
+# → {"allowed": true, "tier": "trusted", "risk_level": "low", "reason": "..."}
+```
 
 ---
 
@@ -78,8 +90,10 @@ print(f"Score: {rep['score']}, Confidence: {rep['confidence']}")
 - **Verifiable Credentials** — Ed25519-signed reputation credentials with dynamic TTL for offline verification.
 - **Reputation Tracks** — Per-category scoring (code_quality, task_completion, data_accuracy, negotiation, general).
 - **Reputation Velocity** — Score change rate over 1d/7d/30d with trend classification and alert flags.
-- **Attestations** — Signed peer-to-peer ratings with cryptographic proof. Negative ratings require evidence.
-- **Dispute Protection** — Contest unfair negative ratings. Arbitrator-resolved, evidence-based.
+- **Trust Check (`can_trust`)** — One-call advisory trust decision: score + tier + risk + explanation. "Should I delegate to this agent?"
+- **Offline Credentials** — Ed25519-signed reputation credentials. Verify trust without API calls — no latency, no single point of failure.
+- **Attestations** — Signed peer-to-peer ratings with cryptographic proof. Negative ratings require SHA-256 evidence hash. Score updates immediately.
+- **Dispute Protection** — Contest unfair negative ratings. Auto-assigned arbitrator from verified agent pool. False accusers get risk penalty.
 - **Agent Cards** — Publish capabilities, find agents by skill. Machine-readable discovery.
 - **Trust Gate** — Reputation-based rate limiting. Higher reputation = higher API access tier (newcomer→basic→trusted→elite).
 - **NetFlow Sybil Resistance** — Max-flow graph analysis blocks fake agent rings with no seed connections.
@@ -150,6 +164,18 @@ result = agent.attest_batch([
      "context": "code_quality", "evidence_hash": "abcdef..."},
 ])
 # {"total": 2, "succeeded": 2, "failed": 0, "results": [...]}
+```
+
+### Trust Decision
+
+```python
+# Should I delegate a task to this agent?
+decision = agent.can_trust("did:key:z6Mk...", min_tier="trusted")
+# {"allowed": true, "tier": "trusted", "risk_level": "low", "reason": "Agent meets trusted requirement"}
+
+# With task-specific scoring
+decision = agent.can_trust("did:key:z6Mk...", min_tier="basic", task_type="code_quality")
+# Also returns task_score and task_confidence for the specific category
 ```
 
 ### Reputation
