@@ -17,13 +17,12 @@ import json
 import logging
 from typing import Type
 
-from pydantic import BaseModel, Field
-
 from agentveil.agent import AVPAgent
 
 log = logging.getLogger("agentveil.tools.crewai")
 
 try:
+    from pydantic import BaseModel, Field
     from crewai.tools import BaseTool
 except ImportError:
     raise ImportError(
