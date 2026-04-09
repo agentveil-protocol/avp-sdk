@@ -342,7 +342,7 @@ class AVPMockAgent(AVPAgent):
     # === Health (mock) ===
 
     def health(self) -> dict:
-        return {"status": "ok", "mode": "mock", "version": "0.5.2"}
+        return {"status": "ok", "mode": "mock", "version": "0.5.3"}
 
     def __repr__(self) -> str:
         status = "verified" if self._is_verified else "registered" if self._is_registered else "new"
