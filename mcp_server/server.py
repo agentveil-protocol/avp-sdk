@@ -95,11 +95,12 @@ def check_reputation(
         Returns {"error": "..."} on network or server errors.
     """
     try:
-        agent = _get_agent()
-        result = agent.get_reputation(did)
-        return json.dumps(result, indent=2)
-    except AVPNotFoundError:
-        return json.dumps({"error": f"Agent {did} not found", "suggestion": "Verify the DID is correct and the agent is registered"})
+        import httpx
+        with httpx.Client(base_url=BASE_URL, timeout=15) as c:
+            r = c.get(f"/v1/reputation/{did}")
+            if r.status_code == 404:
+                return json.dumps({"error": f"Agent {did} not found", "suggestion": "Verify the DID is correct and the agent is registered"})
+            return json.dumps(r.json(), indent=2)
     except Exception as e:
         return _err(e)
 
@@ -136,7 +137,6 @@ def check_trust(
         Returns {"error": "..."} if DID not found or on network errors.
     """
     try:
-        agent = _get_agent()
         params = {"min_tier": min_tier}
         if task_type:
             params["task_type"] = task_type
@@ -173,11 +173,12 @@ def get_agent_info(
         Returns {"error": "Agent not found"} if DID is not registered.
     """
     try:
-        agent = _get_agent()
-        result = agent.get_agent_info(did)
-        return json.dumps(result, indent=2)
-    except AVPNotFoundError:
-        return json.dumps({"error": f"Agent {did} not found"})
+        import httpx
+        with httpx.Client(base_url=BASE_URL, timeout=15) as c:
+            r = c.get(f"/v1/agents/{did}")
+            if r.status_code == 404:
+                return json.dumps({"error": f"Agent {did} not found"})
+            return json.dumps(r.json(), indent=2)
     except Exception as e:
         return _err(e)
 
@@ -212,14 +213,17 @@ def search_agents(
         provider, and reputation score. Returns empty list if no matches.
     """
     try:
-        agent = _get_agent()
-        result = agent.search_agents(
-            capability=capability or None,
-            provider=provider or None,
-            min_reputation=min_reputation if min_reputation > 0 else None,
-            limit=min(max(limit, 1), 100),
-        )
-        return json.dumps(result, indent=2)
+        import httpx
+        params = {"limit": min(max(limit, 1), 100)}
+        if capability:
+            params["capability"] = capability
+        if provider:
+            params["provider"] = provider
+        if min_reputation > 0:
+            params["min_reputation"] = min_reputation
+        with httpx.Client(base_url=BASE_URL, timeout=15) as c:
+            r = c.get("/v1/cards", params=params)
+            return json.dumps(r.json(), indent=2)
     except Exception as e:
         return _err(e)
 
