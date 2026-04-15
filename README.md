@@ -100,6 +100,8 @@ print(rep)  # Works offline — real crypto, mocked HTTP
 | **Claude** | `pip install agentveil mcp` | MCP server with 12 tools |
 | **Hermes** | `pip install agentveil mcp` | MCP + agentskills.io skill |
 | **Paperclip** | `pip install agentveil` | `avp_should_delegate()` + `avp_evaluate_team()` |
+| **AWS Bedrock** | `pip install agentveil boto3` | Converse API with AVP trust tools |
+| **AgentMesh (MS AGT)** | `pip install agentmesh-avp` | `TrustEngine(external_providers=[AVPProvider()])` |
 
 Full integration guides: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
 
