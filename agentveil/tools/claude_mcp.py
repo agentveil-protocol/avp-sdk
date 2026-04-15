@@ -68,13 +68,20 @@ mcp = FastMCP("agentveil")
 
 @mcp.tool()
 async def check_avp_reputation(did: str) -> str:
-    """Check an AI agent's reputation on Agent Veil Protocol.
+    """Look up an agent's trust score, confidence, and attestation count on AVP.
 
-    Returns trust score (0-1), confidence level, and interpretation.
-    Use this to verify an agent before delegating work.
+    Use BEFORE delegating work to verify the agent is reputable.
+    NOT for logging interactions — use log_avp_interaction instead.
+    NOT for delegation decisions — use should_delegate_to_agent instead.
+
+    Returns JSON with score (0.0-1.0), confidence (0.0-1.0),
+    interpretation (untrusted/newcomer/basic/trusted/elite),
+    and total_attestations count.
+
+    No API key required. Read-only, no side effects.
 
     Args:
-        did: The DID (did:key:z6Mk...) of the agent to check.
+        did: Agent's decentralized identifier, e.g. 'did:key:z6Mk...'.
     """
     try:
         agent = _get_agent()
@@ -92,13 +99,20 @@ async def check_avp_reputation(did: str) -> str:
 
 @mcp.tool()
 async def should_delegate_to_agent(did: str, min_score: float = 0.5) -> str:
-    """Decide whether to delegate a task to an AI agent based on their AVP reputation.
+    """Get a yes/no delegation decision for an agent based on AVP reputation score and confidence.
 
-    Returns a delegation decision with the agent's score and reasoning.
+    Use BEFORE handing off a task to another agent.
+    NOT for just checking a score — use check_avp_reputation instead.
+
+    Returns JSON with delegate (true/false), score, confidence,
+    and a human-readable reason explaining the decision.
+    Approves when score >= min_score AND confidence > 0.1.
+
+    No API key required. Read-only, no side effects.
 
     Args:
-        did: The DID of the agent to evaluate.
-        min_score: Minimum reputation score (0.0-1.0) to approve delegation.
+        did: Agent's decentralized identifier, e.g. 'did:key:z6Mk...'.
+        min_score: Minimum reputation score to approve (0.0-1.0, default 0.5). Higher values for sensitive tasks.
     """
     try:
         agent = _get_agent()
@@ -132,15 +146,23 @@ async def should_delegate_to_agent(did: str, min_score: float = 0.5) -> str:
 async def log_avp_interaction(
     did: str, outcome: str = "positive", context: str = "claude_task"
 ) -> str:
-    """Log an interaction result with another AI agent on Agent Veil Protocol.
+    """Record a signed attestation about an agent you interacted with on AVP.
 
-    Record positive, negative, or neutral outcomes as signed attestations.
-    This builds the agent's reputation over time.
+    Use AFTER completing a task with another agent to record the outcome.
+    NOT for checking reputation — use check_avp_reputation instead.
+
+    SIDE EFFECT: Creates an Ed25519-signed attestation stored on AVP.
+    This permanently affects the target agent's reputation score.
+    Positive attestations increase score, negative decrease it.
+
+    Returns JSON with status, target DID, outcome, weight, and context.
+
+    Requires agent registration (auto-created on first call).
 
     Args:
-        did: The DID of the agent you interacted with.
-        outcome: Interaction outcome: 'positive', 'negative', or 'neutral'.
-        context: Context of the interaction (e.g. 'code_review', 'research').
+        did: Target agent's decentralized identifier, e.g. 'did:key:z6Mk...'.
+        outcome: Result of the interaction: 'positive', 'negative', or 'neutral'.
+        context: What the interaction was about, e.g. 'code_review', 'research', 'data_analysis'.
     """
     try:
         agent = _get_agent()
@@ -165,14 +187,20 @@ async def log_avp_interaction(
 async def search_avp_agents(
     capability: str = "", provider: str = "", min_reputation: float = 0.0
 ) -> str:
-    """Search for AI agents on Agent Veil Protocol by capability or provider.
+    """Find agents registered on AVP, filtered by capability, provider, or minimum reputation.
 
-    Returns a list of agents with their DIDs, capabilities, and reputation scores.
+    Use to discover available agents before delegating work.
+    NOT for checking a specific agent's score — use check_avp_reputation instead.
+
+    Returns JSON array of agents with DID, name, capabilities, provider,
+    and reputation score. Currently indexes 8,000+ agents.
+
+    No API key required. Read-only, no side effects.
 
     Args:
-        capability: Filter by capability (e.g. 'code_review', 'research').
-        provider: Filter by LLM provider (e.g. 'anthropic', 'openai').
-        min_reputation: Minimum reputation score (0.0-1.0).
+        capability: Filter by skill, e.g. 'code_review', 'research', 'data_analysis'. Empty string returns all.
+        provider: Filter by LLM provider, e.g. 'anthropic', 'openai', 'google'. Empty string returns all.
+        min_reputation: Only return agents with score >= this value (0.0-1.0, default 0.0).
     """
     try:
         agent = _get_agent()
