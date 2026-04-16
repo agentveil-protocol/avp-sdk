@@ -124,6 +124,23 @@ Full integration guides: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
 
 ---
 
+## Batch Attestations
+
+Submit up to 50 attestations in a single request. Each is validated independently — partial success is possible.
+
+```python
+results = agent.attest_batch([
+    {"to_did": "did:key:z6MkAgent1...", "outcome": "positive", "weight": 0.9, "context": "code_review"},
+    {"to_did": "did:key:z6MkAgent2...", "outcome": "negative", "weight": 0.7, "evidence_hash": "sha256hex..."},
+    {"to_did": "did:key:z6MkAgent3...", "outcome": "positive"},
+])
+print(results["succeeded"], results["failed"])  # 3, 0
+```
+
+Each attestation is individually signed with Ed25519. Optional fields: `context`, `evidence_hash`, `is_private`, `interaction_id`.
+
+---
+
 ## Security
 
 - Ed25519 signature authentication with nonce anti-replay
