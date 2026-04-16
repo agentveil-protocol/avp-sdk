@@ -2,6 +2,13 @@
 
 All notable changes to the `agentveil` SDK.
 
+## [Unreleased]
+
+### Fixed
+- `_auto_handle_challenge` no longer blocks the event loop when called from an
+  async context. Polling work is now offloaded to a daemon thread
+  (`avp-challenge-{name}`); sync callers behave exactly as before.
+
 ## [0.5.2] — 2026-04-09
 
 ### Added

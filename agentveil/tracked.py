@@ -103,22 +103,42 @@ def _get_or_create_agent(
 
 def _auto_handle_challenge(agent: AVPAgent, max_wait: float = 10.0) -> None:
     """
+    Dispatch onboarding challenge handling.
+
+    In an async context (running event loop detected), the blocking polling
+    work is offloaded to a daemon thread so the event loop is not blocked.
+    In a sync context, runs inline as before.
+
+    Best-effort side effect: failures are logged and never raised.
+    """
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop — safe to block in current thread
+        _run_auto_handle_challenge(agent, max_wait)
+        return
+
+    # Async context — offload to background thread to avoid blocking the loop
+    agent_name = getattr(agent, "name", "unknown")
+    thread = threading.Thread(
+        target=_run_auto_handle_challenge,
+        args=(agent, max_wait),
+        name=f"avp-challenge-{agent_name}",
+        daemon=True,
+    )
+    thread.start()
+    log.info(f"Onboarding challenge handler dispatched to background thread: {thread.name}")
+
+
+def _run_auto_handle_challenge(agent: AVPAgent, max_wait: float = 10.0) -> None:
+    """
     Poll for an onboarding challenge and auto-submit an answer.
-    Non-blocking best-effort: if anything fails, the agent continues without challenge.
-    Max wait time prevents blocking the decorator for too long.
+    Synchronous, blocking — call from a thread when running under an event loop.
     """
     import time
-    import asyncio
-
-    def _sleep(seconds: float) -> None:
-        """Sleep without blocking event loop if one is running."""
-        try:
-            asyncio.get_running_loop()
-            # Inside event loop — yield control briefly instead of blocking
-            # (full async sleep not possible from sync function)
-            time.sleep(seconds)  # TODO: migrate to fully async in v0.6
-        except RuntimeError:
-            time.sleep(seconds)
 
     deadline = time.monotonic() + max_wait
 
@@ -131,7 +151,7 @@ def _auto_handle_challenge(agent: AVPAgent, max_wait: float = 10.0) -> None:
                 break
             if time.monotonic() > deadline:
                 return
-            _sleep(1.0)
+            time.sleep(1.0)
 
         if not challenge or challenge.get("status") != "awaiting_response":
             return
