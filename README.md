@@ -12,6 +12,8 @@ Python SDK for **Agent Veil Protocol** — trust enforcement for autonomous agen
 
 > [Why agent trust infrastructure matters](docs/SECURITY_CONTEXT.md) — verified CVEs, market data, and the structural problem AVP addresses.
 
+> **[Integrated with Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit/pull/1010)** — AVPProvider merged as official TrustProvider integration.
+
 <p align="center">
   <img src="docs/demo.gif" alt="AVP SDK Demo — identity, attestation, trust decisions, sybil resistance" width="720">
 </p>
