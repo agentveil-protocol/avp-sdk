@@ -72,12 +72,27 @@ rep = agent.get_reputation()
 print(rep)  # Works offline — real crypto, mocked HTTP
 ```
 
+### Verify trust offline — no SDK required
+
+```bash
+# Get a W3C Verifiable Credential (VC v2.0)
+curl https://agentveil.dev/v1/reputation/{agent_did}/credential?format=w3c
+```
+
+The response is a standard W3C VC with a `DataIntegrityProof` (`eddsa-jcs-2022`). Verify it with any VC library — Veramo, SpruceID, Digital Bazaar, or your own Ed25519 implementation. No AVP SDK needed.
+
+```python
+# Or verify with the SDK:
+cred = agent.get_reputation_credential(format="w3c")
+assert AVPAgent.verify_w3c_credential(cred)  # offline, no API call
+```
+
 ---
 
 ## Features
 
 - **Trust Check** — `can_trust()` — one-call advisory trust decision: score + tier + risk + explanation
-- **Offline Credentials** — Ed25519-signed reputation credentials. Verify trust without API calls
+- **W3C VC v2.0 Credentials** — Trust credentials are W3C Verifiable Credentials compliant (`eddsa-jcs-2022` Data Integrity proof). Verify offline with any standard VC library, no AVP SDK required
 - **One-Line Decorator** — `@avp_tracked()` — auto-register, auto-attest, auto-protect
 - **DID Identity** — W3C `did:key` (Ed25519). Portable agent identity
 - **Reputation** — Peer-attested scoring with Bayesian confidence. Sybil-resistant
