@@ -130,8 +130,47 @@ agentveil-mcp
 
 | Variable | Default | Description |
 |---|---|---|
-| `AVP_BASE_URL` | `https://agentveil.dev` | AVP API base URL. Point at a local server for development. |
+| `AVP_BASE_URL` | `https://agentveil.dev` | AVP API base URL. Point at a local server (or internal docker hostname) for development/deployment. |
 | `AVP_AGENT_NAME` | `mcp_agent` | Name used for the local key file in `~/.avp/agents/`. Only matters for write tools. |
+| `AVP_MCP_READONLY` | (unset) | When set to `1`/`true`, write tools are **not registered** with FastMCP. They do not appear in `tools/list` and cannot be invoked. Read tools remain available. Intended for hosted/public deployments. |
+| `AVP_MCP_TOKEN` | (unset) | Bearer token required for HTTP transport. Any request without `Authorization: Bearer <token>` returns 401. stdio transport ignores this. If `--http` is used with an empty token, the server refuses to start (fail-closed). |
+
+## Hosted mode (HTTP + bearer token)
+
+For a public endpoint fronted by a reverse proxy (e.g. Caddy subpath), run in HTTP
+mode with a bearer token and readonly gate:
+
+```bash
+export AVP_MCP_READONLY=1
+export AVP_MCP_TOKEN="$(openssl rand -base64 32)"
+agentveil-mcp --http --port 8765
+```
+
+This starts a standalone uvicorn server that:
+
+1. Exposes `GET /healthz` unauthenticated (for container healthchecks).
+2. Requires `Authorization: Bearer $AVP_MCP_TOKEN` on every other path.
+3. Registers only the 8 read-only tools — the 4 write tools are absent from
+   `tools/list` and cannot be invoked, even by an authenticated caller.
+
+Example MCP client config (Cursor) pointing at a hosted endpoint:
+
+```json
+{
+  "mcpServers": {
+    "avp-hosted": {
+      "url": "https://agentveil.dev/mcp/",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+The token is shared per-deployment, not per-user. Rotate on suspected leak or
+when the tester set changes. For per-user identity, use the local stdio mode
+with `AVPAgent` keys under `~/.avp/agents/`.
 
 ## Tools
 

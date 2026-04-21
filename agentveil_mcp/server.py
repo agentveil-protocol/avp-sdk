@@ -7,6 +7,11 @@ Usage:
     agentveil-mcp                 # stdio transport (Claude Desktop / Cursor)
     agentveil-mcp --http          # HTTP transport (remote)
     python -m agentveil_mcp       # equivalent to stdio transport
+
+Hosted mode env vars (HTTP transport only):
+    AVP_MCP_READONLY=1            # skip write-tool registration
+    AVP_MCP_TOKEN=<secret>        # required for --http; requests without
+                                  # Authorization: Bearer <token> return 401
 """
 
 import json
@@ -23,6 +28,19 @@ log = logging.getLogger("avp-mcp")
 
 BASE_URL = os.environ.get("AVP_BASE_URL", "https://agentveil.dev")
 AGENT_NAME = os.environ.get("AVP_AGENT_NAME", "mcp_agent")
+
+
+def _is_readonly() -> bool:
+    """True iff AVP_MCP_READONLY is set to a truthy value at call time.
+
+    Read on each call rather than at module import so tests can set the env
+    var, reload the module, and observe the effect without import-cache
+    fragility. In production the value is set once at container start.
+    """
+    return os.environ.get("AVP_MCP_READONLY", "").lower() in ("1", "true", "yes")
+
+
+IS_READONLY = _is_readonly()
 
 mcp = FastMCP(
     "Agent Veil Protocol",
@@ -331,9 +349,14 @@ def get_audit_trail(
 
 # ============================================================
 # WRITE TOOLS (require agent identity)
+#
+# In readonly mode (AVP_MCP_READONLY=1) these tools are NOT registered with
+# FastMCP at all. They never appear in tools/list, never get invoked, and
+# the tool functions below are unreachable from the protocol surface.
+# Registration happens at the bottom of the module via `_register_write_tools()`.
 # ============================================================
 
-@mcp.tool()
+
 def register_agent(
     display_name: Annotated[str, Field(description="Human-readable name for the agent. Example: 'Code Reviewer'. If empty, uses AVP_AGENT_NAME env var")] = "",
 ) -> str:
@@ -376,7 +399,6 @@ def register_agent(
         return _err(e)
 
 
-@mcp.tool()
 def submit_attestation(
     to_did: Annotated[str, Field(description="DID of the agent being rated. Format: did:key:z6Mk... Cannot be your own DID")],
     outcome: Annotated[str, Field(description="Rating: 'positive' (performed well), 'negative' (performed poorly), or 'neutral' (no strong signal)")] = "positive",
@@ -429,7 +451,6 @@ def submit_attestation(
         return _err(e)
 
 
-@mcp.tool()
 def publish_agent_card(
     capabilities: Annotated[str, Field(description="Comma-separated capabilities. Examples: 'code_review,security_audit,testing'. At least one required")],
     provider: Annotated[str, Field(description="LLM provider name. Examples: anthropic, openai, google, mistral. Optional")] = "",
@@ -477,7 +498,6 @@ def publish_agent_card(
         return _err(e)
 
 
-@mcp.tool()
 def get_my_agent_info() -> str:
     """Get YOUR agent's DID, registration status, and reputation — the locally configured agent only.
 
@@ -541,6 +561,96 @@ def protocol_info() -> str:
 
 
 # ============================================================
+# CONDITIONAL WRITE-TOOL REGISTRATION
+# ============================================================
+
+def _register_write_tools() -> None:
+    """Register the 4 write tools with the FastMCP server.
+
+    Called only when NOT in readonly mode. In readonly mode the write tool
+    functions above remain plain Python callables but are not reachable via
+    the MCP protocol — they do not appear in tools/list.
+    """
+    mcp.add_tool(register_agent)
+    mcp.add_tool(submit_attestation)
+    mcp.add_tool(publish_agent_card)
+    mcp.add_tool(get_my_agent_info)
+
+
+if not IS_READONLY:
+    _register_write_tools()
+    log.info("write tools registered (full mode)")
+else:
+    log.info("readonly mode: write tools not registered")
+
+
+# ============================================================
+# HOSTED-MODE HTTP TRANSPORT: auth middleware + health endpoint
+# ============================================================
+
+def _build_http_app(token: str):
+    """Build the ASGI app used by `agentveil-mcp --http`.
+
+    Wraps FastMCP's streamable-http ASGI app with:
+      - a GET /healthz route (unauthenticated) returning {"status":"ok"}
+      - a bearer-token middleware enforcing Authorization: Bearer <token>
+        on every path except /healthz
+
+    Fail-closed: if `token` is empty, this function is never called (see main()).
+    """
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+    from starlette.routing import Mount, Route
+
+    async def healthz(_request: Request) -> Response:
+        return JSONResponse({"status": "ok"})
+
+    class BearerAuthMiddleware(BaseHTTPMiddleware):
+        def __init__(self, app, *, expected_token: str):
+            super().__init__(app)
+            self._expected_token = expected_token
+
+        async def dispatch(self, request: Request, call_next):
+            # Whitelist the health route — docker healthcheck must not need a token.
+            if request.url.path == "/healthz":
+                return await call_next(request)
+            header = request.headers.get("authorization", "")
+            expected = f"Bearer {self._expected_token}"
+            # Constant-time compare to resist timing oracles.
+            import hmac
+            if not hmac.compare_digest(header, expected):
+                return JSONResponse(
+                    {"error": "unauthorized"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return await call_next(request)
+
+    mcp_asgi = mcp.streamable_http_app()
+
+    app = Starlette(
+        routes=[
+            Route("/healthz", healthz, methods=["GET"]),
+            Mount("/", app=mcp_asgi),
+        ],
+        middleware=[
+            Middleware(BearerAuthMiddleware, expected_token=token),
+        ],
+    )
+    return app
+
+
+# ============================================================
+# RESOURCES
+# ============================================================
+
+# NOTE: protocol_info() is defined above; kept here as a section marker for readers.
+
+
+# ============================================================
 # ENTRY POINT
 # ============================================================
 
@@ -552,7 +662,19 @@ def main():
     args = parser.parse_args()
 
     if args.http:
-        mcp.run(transport="streamable-http", port=args.port)
+        token = os.environ.get("AVP_MCP_TOKEN", "").strip()
+        if not token:
+            log.error(
+                "AVP_MCP_TOKEN is empty but --http requires it. Refusing to start. "
+                "Set AVP_MCP_TOKEN in the environment (e.g. via /opt/avp/.env.mcp) "
+                "or run without --http for stdio transport."
+            )
+            raise SystemExit(2)
+
+        app = _build_http_app(token)
+
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
     else:
         mcp.run(transport="stdio")
 
