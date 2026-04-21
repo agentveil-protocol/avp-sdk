@@ -591,19 +591,33 @@ else:
 def _build_http_app(token: str):
     """Build the ASGI app used by `agentveil-mcp --http`.
 
-    Wraps FastMCP's streamable-http ASGI app with:
+    Returns the FastMCP streamable-http ASGI app (a Starlette instance with
+    its session-manager lifespan already wired), with two additions:
       - a GET /healthz route (unauthenticated) returning {"status":"ok"}
       - a bearer-token middleware enforcing Authorization: Bearer <token>
         on every path except /healthz
 
+    We attach the health route and middleware to the MCP app directly rather
+    than wrapping it in a parent Starlette. Wrapping breaks FastMCP's
+    streamable-http session manager because its task group is initialized by
+    the app's own lifespan, which ASGI does not propagate to mounted children
+    by default.
+
+    The MCP transport route is at `/mcp` (FastMCP default, see
+    `mcp.settings.streamable_http_path`). When fronted by Caddy with
+    `handle_path /mcp/*`, Caddy strips the `/mcp` prefix and forwards to
+    this server; we therefore accept the transport at both `/` and `/mcp`.
+    In practice Caddy's `reverse_proxy` (instead of `handle_path`) is the
+    cleaner composition and is documented in the agentveil_mcp README for
+    the hosted deployment.
+
     Fail-closed: if `token` is empty, this function is never called (see main()).
     """
-    from starlette.applications import Starlette
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response
-    from starlette.routing import Mount, Route
+    from starlette.routing import Route
 
     async def healthz(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
@@ -629,17 +643,19 @@ def _build_http_app(token: str):
                 )
             return await call_next(request)
 
-    mcp_asgi = mcp.streamable_http_app()
+    # FastMCP returns a fully-wired Starlette app with its own lifespan that
+    # initializes the session manager task group. Reuse it as our base.
+    app = mcp.streamable_http_app()
 
-    app = Starlette(
-        routes=[
-            Route("/healthz", healthz, methods=["GET"]),
-            Mount("/", app=mcp_asgi),
-        ],
-        middleware=[
-            Middleware(BearerAuthMiddleware, expected_token=token),
-        ],
-    )
+    # Prepend the health route so it takes precedence over any MCP routes.
+    app.router.routes.insert(0, Route("/healthz", healthz, methods=["GET"]))
+
+    # Attach the bearer middleware. Starlette builds the middleware stack
+    # lazily on first request, so adding to user_middleware here is fine
+    # provided we do it before the app has served a request.
+    app.user_middleware.insert(0, Middleware(BearerAuthMiddleware, expected_token=token))
+    app.middleware_stack = app.build_middleware_stack()
+
     return app
 
 
