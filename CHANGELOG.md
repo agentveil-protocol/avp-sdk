@@ -2,6 +2,17 @@
 
 All notable changes to the `agentveil` SDK.
 
+## [0.5.8] — 2026-04-22
+
+### Changed
+- README: replaced Glama MCP Directory image badge with a plain text link.
+  The badge rendered the current Glama quality score ("not tested") which
+  looked weak on the PyPI package page. The directory listing is still
+  linked, just without the score card image.
+
+### Notes
+- No runtime, API, or behavior changes. Pure README/package-metadata update.
+
 ## [0.5.7] — 2026-04-17
 
 ### Fixed
