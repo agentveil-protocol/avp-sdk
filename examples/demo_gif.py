@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Terminal demo for GIF recording — shows AVP SDK in 4 scenes.
+Terminal demo for GIF recording — shows the AVP control-layer narrative in 5 scenes.
 
-Shows public API only. No internal architecture details.
+Uses only the public SDK in mock mode. No backend, no webhook URLs,
+no internal thresholds, no admin surfaces.
 
 Record with asciinema:
     asciinema rec docs/demo.cast -c "python examples/demo_gif.py"
@@ -10,8 +11,10 @@ Convert to GIF:
     agg docs/demo.cast docs/demo.gif --cols 72 --rows 28 --speed 1
 """
 
+import hashlib
 import time
-import sys
+
+from agentveil import AVPAgent
 
 # ANSI colors
 G = "\033[32m"   # green
@@ -24,116 +27,99 @@ D = "\033[2m"    # dim
 RST = "\033[0m"  # reset
 
 
-def p(text, delay=0.6):
-    """Print line and pause."""
+def p(text, delay=0.5):
+    """Print a line and pause. Base cadence 0.5s (was 0.6s in v1)."""
     print(text, flush=True)
     time.sleep(delay)
 
 
 def header(num, title):
     print(flush=True)
-    p(f"{W}{'=' * 60}{RST}", 0.2)
-    p(f"{W}  [{num}/4] {title}{RST}", 0.2)
-    p(f"{W}{'=' * 60}{RST}", 0.6)
+    p(f"{W}{'=' * 60}{RST}", 0.15)
+    p(f"{W}  [{num}/5] {title}{RST}", 0.15)
+    p(f"{W}{'=' * 60}{RST}", 0.5)
 
 
 # ── Intro ──
 print(flush=True)
-p(f"{C}  Agent Veil Protocol — SDK Demo{RST}", 0.4)
-p(f"{D}  Trust enforcement for autonomous agents{RST}", 0.3)
-p(f"{D}  pip install agentveil{RST}", 1.0)
+p(f"{C}  Agent Veil Protocol{RST}", 0.35)
+p(f"{D}  decide before action, monitor trust, alert on change,{RST}", 0.2)
+p(f"{D}  leave verifiable proof{RST}", 0.9)
 
-# ── Scene 1: Create agents ──
-header("1", "Create agents with DID identity")
+# ── Scene 1: Trust check — before action ──
+header("1", "Trust check \u2014 before action")
 
-p(f"{D}>>> from agentveil import AVPAgent{RST}", 0.4)
-from agentveil import AVPAgent
-
-p(f"{D}>>> alice = AVPAgent.create(mock=True, name='alice'){RST}", 0.4)
+p(f"{D}>>> from agentveil import AVPAgent{RST}", 0.3)
+p(f"{D}>>> alice = AVPAgent.create(mock=True, name='alice'){RST}", 0.3)
 alice = AVPAgent.create(mock=True, name="alice")
-p(f"{G}  \u2713 DID: {alice.did[:48]}...{RST}", 0.5)
-
-p(f"{D}>>> bob = AVPAgent.create(mock=True, name='bob'){RST}", 0.4)
+p(f"{D}>>> bob   = AVPAgent.create(mock=True, name='bob'){RST}", 0.3)
 bob = AVPAgent.create(mock=True, name="bob")
-p(f"{G}  \u2713 DID: {bob.did[:48]}...{RST}", 0.5)
+alice.register(display_name="alice")
+bob.register(display_name="bob")
+p(f"{G}  \u2713 two agents registered with DID identity{RST}", 0.6)
 
-p(f"{D}>>> alice.register(display_name='Alice \u2014 Code Reviewer'){RST}", 0.3)
-alice.register(display_name="Alice \u2014 Code Reviewer")
-p(f"{G}  \u2713 Registered{RST}", 0.3)
+p(f"{D}>>> alice.can_trust(bob.did, min_tier='basic'){RST}", 0.4)
+p(f"{G}  {{{RST}", 0.15)
+p(f'{G}    "allowed": true,{RST}', 0.2)
+p(f'{G}    "tier": "basic",{RST}', 0.2)
+p(f'{G}    "risk_level": "low",{RST}', 0.2)
+p(f'{G}    "reason": "agent meets basic requirement"{RST}', 0.2)
+p(f"{G}  }}{RST}", 0.9)
 
-p(f"{D}>>> bob.register(display_name='Bob \u2014 Security Auditor'){RST}", 0.3)
-bob.register(display_name="Bob \u2014 Security Auditor")
-p(f"{G}  \u2713 Registered{RST}", 0.3)
+# ── Scene 2: Action — delegation ──
+header("2", "Action \u2014 delegation")
 
-p(f"{D}>>> alice.publish_card(capabilities=['code_review'], provider='anthropic'){RST}", 0.3)
-alice.publish_card(capabilities=["code_review"], provider="anthropic")
-p(f"{G}  \u2713 Card published \u2014 discoverable on network{RST}", 1.0)
+p(f"{D}>>> alice publishes a job, bob accepts and completes it{RST}", 0.4)
+p(f"{G}  \u2713 job: code review   \u2192 published{RST}", 0.3)
+p(f"{G}  \u2713 job accepted       \u2192 by bob{RST}", 0.3)
+p(f"{G}  \u2713 job completed      \u2192 result delivered{RST}", 0.9)
 
-# ── Scene 2: Attestation + reputation ──
-header("2", "Peer attestation \u2014 reputation updates instantly")
+# ── Scene 3: Signal changes — trust degrades ──
+header("3", "Signal changes \u2014 trust degrades")
 
-p(f"{D}>>> alice.attest(bob.did, outcome='positive', weight=0.9, context='code_review'){RST}", 0.5)
-alice.attest(bob.did, outcome="positive", weight=0.9, context="code_review")
-p(f"{G}  \u2713 Attestation submitted{RST}", 0.5)
+p(f"{D}>>> a counter-party submits a signed negative attestation{RST}", 0.4)
+p(f"{D}    with context + evidence hash{RST}", 0.3)
+ev = hashlib.sha256(b"demo:evidence").hexdigest()
+alice.attest(
+    bob.did,
+    outcome="negative",
+    weight=1.0,
+    context="code_review",
+    evidence_hash=ev,
+)
+p(f"{Y}  \u26a1 reputation recomputes on the next cycle{RST}", 0.5)
+p(f"{Y}  \u26a1 risk_level moved up, signal recorded{RST}", 0.9)
 
-p(f"{D}>>> rep = bob.get_reputation(){RST}", 0.4)
-_rep = bob.get_reputation()
-p(f"{B}  score: 0.42  confidence: 0.31  tier: basic{RST}", 0.5)
-p(f"{B}  tracks: code_quality=0.48  task_completion=0.37{RST}", 0.5)
-p(f"{G}  \u2713 Score updated immediately after attestation{RST}", 1.2)
+# ── Scene 4: Alert + deny — webhook fires ──
+header("4", "Alert + deny \u2014 webhook fires")
 
-# ── Scene 3: Trust decision ──
-header("3", "Trust decision \u2014 one call")
-
-p(f"{D}>>> alice.can_trust(bob.did, min_tier='trusted'){RST}", 0.5)
-p(f"{Y}  {{{RST}", 0.2)
-p(f'{Y}    "allowed": false,{RST}', 0.3)
-p(f'{Y}    "tier": "basic",{RST}', 0.3)
-p(f'{Y}    "risk_level": "low",{RST}', 0.3)
-p(f'{Y}    "reason": "Agent tier basic below required trusted"{RST}', 0.3)
-p(f"{Y}  }}{RST}", 0.8)
+p(f"{D}>>> alice.can_trust(bob.did, min_tier='basic')  # re-check{RST}", 0.4)
+p(f"{R}  {{{RST}", 0.15)
+p(f'{R}    "allowed": false,{RST}', 0.2)
+p(f'{R}    "tier": "newcomer",{RST}', 0.2)
+p(f'{R}    "risk_level": "medium",{RST}', 0.2)
+p(f'{R}    "reason": "agent tier below required basic"{RST}', 0.2)
+p(f"{R}  }}{RST}", 0.5)
 print(flush=True)
+p(f"{D}  webhook payload delivered to your endpoint:{RST}", 0.3)
+p(f"{Y}  {{ \"event\": \"score_drop\", \"trigger\": \"score_below_threshold\",{RST}", 0.2)
+p(f'{Y}    "payload_schema_version": 2 }}{RST}', 0.9)
 
-p(f"{D}>>> alice.can_trust(bob.did, min_tier='basic'){RST}", 0.5)
-p(f"{G}  {{{RST}", 0.2)
-p(f'{G}    "allowed": true,{RST}', 0.3)
-p(f'{G}    "tier": "basic",{RST}', 0.3)
-p(f'{G}    "reason": "Agent meets basic requirement"{RST}', 0.3)
-p(f"{G}  }}{RST}", 0.8)
+# ── Scene 5: Proof — offline-verifiable audit ──
+header("5", "Proof \u2014 offline-verifiable audit")
+
+p(f"{D}>>> every decision is appended to a hash-chained audit trail{RST}", 0.4)
+p(f"{D}>>> anyone can verify it without our server:{RST}", 0.4)
 print(flush=True)
-
-p(f"{W}  One call. Score + risk + tier + explanation.{RST}", 1.5)
-
-# ── Scene 4: Sybil resistance ──
-header("4", "Sybil resistance \u2014 fake agents blocked")
-
-p(f"{D}>>> sybil1 = AVPAgent.create(mock=True, name='sybil1'){RST}", 0.3)
-sybil1 = AVPAgent.create(mock=True, name="sybil1")
-p(f"{D}>>> sybil2 = AVPAgent.create(mock=True, name='sybil2'){RST}", 0.3)
-sybil2 = AVPAgent.create(mock=True, name="sybil2")
-sybil1.register()
-sybil2.register()
-
-p(f"{Y}  sybil1 \u2192 sybil2: positive (w=1.0){RST}", 0.6)
-sybil1.attest(sybil2.did, outcome="positive", weight=1.0)
-p(f"{Y}  sybil2 \u2192 sybil1: positive (w=1.0){RST}", 0.6)
-sybil2.attest(sybil1.did, outcome="positive", weight=1.0)
-
-p(f"", 0.3)
-p(f"{R}  \u26a1 Mutual attestation \u2014 weight reduced to 0.3x{RST}", 0.8)
-p(f"{R}  \u26a1 No verified trust paths \u2014 flow_score = 0.0{RST}", 0.8)
-p(f"{R}  \u26a1 Effective reputation: 0.00{RST}", 1.0)
-p(f"", 0.3)
-
-p(f"{D}>>> alice.can_trust(sybil1.did){RST}", 0.5)
-p(f'{R}  {{"allowed": false, "risk_level": "critical"}}{RST}', 1.0)
-p(f"", 0.2)
-p(f"{G}  \u2713 Honest agents protected. Sybils gated to zero.{RST}", 1.5)
-
-# ── Done ──
+p(f"{D}  $ python verify_chain.py audit_trail.json{RST}", 0.4)
+p(f"{G}  chain valid: 7 entries, per-entry integrity confirmed{RST}", 0.7)
 print(flush=True)
-p(f"{W}{'=' * 60}{RST}", 0.2)
-p(f"{G}  pip install agentveil{RST}", 0.3)
+p(f"{W}  decide \u2192 act \u2192 monitor \u2192 revoke \u2192 prove{RST}", 0.5)
+
+# ── Outro ──
+print(flush=True)
+p(f"{W}{'=' * 60}{RST}", 0.15)
 p(f"{G}  https://agentveil.dev{RST}", 0.3)
+p(f"{G}  pip install agentveil{RST}", 0.3)
 p(f"{W}{'=' * 60}{RST}", 0.5)
 print(flush=True)
