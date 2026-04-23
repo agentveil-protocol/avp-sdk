@@ -15,8 +15,10 @@ Python SDK for **Agent Veil Protocol** — trust enforcement for autonomous agen
 > **[Integrated with Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit/pull/1010)** — AVPProvider merged as official TrustProvider integration.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="AVP SDK Demo — identity, attestation, trust decisions, sybil resistance" width="720">
+  <img src="docs/demo.gif" alt="AVP SDK Demo — trust check, action, signal change, alert, offline proof" width="720">
 </p>
+
+> **Full end-to-end walkthrough:** [`examples/proof_pack/`](examples/proof_pack/) — runnable demo of the complete arc: trust check → delegation → signal change → alert → offline-verifiable proof.
 
 ```python
 from agentveil import AVPAgent
@@ -167,6 +169,7 @@ Each attestation is individually signed with Ed25519. Optional fields: `context`
 
 | Example | Description |
 |---------|-------------|
+| [`proof_pack/`](examples/proof_pack/) | **End-to-end walkthrough** — trust check → delegation → signal change → alert → offline-verifiable proof. Local backend required. |
 | [`standalone_demo.py`](examples/standalone_demo.py) | No server needed — full SDK demo with mock mode |
 | [`quickstart.py`](examples/quickstart.py) | Register, publish card, check reputation |
 | [`two_agents.py`](examples/two_agents.py) | Full A2A interaction with attestations |

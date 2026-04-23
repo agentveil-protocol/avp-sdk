@@ -1,11 +1,10 @@
-# AVP Proof Pack — internal demo (Step 2)
+# AVP Proof Pack — end-to-end walkthrough
 
-> Status: **internal only**. Do not publish, do not push to public `avp-sdk`.
-> Derived public/buyer cuts come in Step 2.5 / Step 3.
-
-One runnable walkthrough of the full AVP trust lifecycle:
+One runnable walkthrough of the full AVP trust lifecycle, against a local AVP backend:
 
 > **AVP decides whether an agent should act, monitors trust during execution, revokes it on degradation, fires an alert, and leaves a cryptographic audit trail anyone can verify offline.**
+
+This is the canonical proof-oriented demo for the SDK. For a quick visual overview, see the GIF at the top of the [main README](../../README.md). For a no-server tour of the SDK API, see [`standalone_demo.py`](../standalone_demo.py).
 
 ---
 
@@ -31,13 +30,16 @@ trigger conditions, and dispatcher path are production code.
 
 ## Prerequisites
 
-1. **Local AVP backend** (from the private `avp/` repo) running via `docker compose`:
+1. **A local AVP backend** running via `docker compose`:
    ```bash
-   cd /path/to/avp
+   cd /path/to/your/avp-backend
    # Ensure .env has ENVIRONMENT=development so /v1/alerts accepts http:// URLs
    docker compose up -d
    curl http://localhost:8000/v1/health   # should return ok
    ```
+   The hosted instance at [agentveil.dev](https://agentveil.dev) does not accept
+   `http://` webhook targets, so this walkthrough requires a local backend in
+   development mode.
 2. **Python deps** in this directory:
    ```bash
    pip install agentveil httpx pynacl base58
@@ -75,7 +77,7 @@ and the orchestrator prints `PROOF PACK DEMO COMPLETE`.
 | `--compose-service` | `api` | Service name in `docker-compose.yml` (NOT container name) |
 | `--compose-dir` | cwd | Directory containing `docker-compose.yml` |
 | `--webhook-url` | `http://host.docker.internal:8765/hook` | URL the AVP container posts to. On Linux, use `http://172.17.0.1:8765/hook` or wire a bridge network alias. |
-| `--threshold` | `0.99` | Alert fires below this score. High threshold ensures the first negative attestation trips it. |
+| `--threshold` | `0.99` | Alert fires below this score. Set this high so the first negative attestation trips the alert during the demo run; production deployments typically use a much lower value. |
 
 ---
 
@@ -105,7 +107,7 @@ intentionally a subset — the backend trail endpoint skips unrelated events.
 For global completeness, use the server-side `GET /v1/audit/verify` reference
 (saved as `09b_server_full_chain_reference.json`).
 
-Reference hash formula, documented at `avp/app/core/audit/chain.py:42-47`:
+Reference hash formula (matches the AVP backend implementation):
 
 ```
 entry_hash = SHA256(
@@ -123,18 +125,16 @@ audit trail JSON and independently verify per-entry integrity.
 
 ---
 
-## Reuse vs. copy (Step 2 rule)
+## How the pieces fit
 
-Per `PROOF_PACK_PLAN.md` §Step 2 ground rules:
-
-- `verify_chain.py` — **copied logic** from `app/core/audit/chain.py`.
-  It is a reference re-implementation, intentionally duplicated so it can run
-  without the AVP backend.
-- `run_demo.py` — **imports** `AVPAgent` from the public `agentveil` SDK; does
-  NOT import from sibling examples (`jobs_demo.py` has module-level side
-  effects and a prod URL). The `jobs_request` helper is copied locally (10 lines).
-
-No changes outside `proof_pack/` were made in Step 2.
+- `verify_chain.py` is a **standalone reference verifier** — stdlib only,
+  no dependency on the `agentveil` SDK. It is intentionally a separate
+  re-implementation of the audit hash-chain rule so anyone can verify a trail
+  without trusting either the AVP backend or the SDK.
+- `run_demo.py` uses only the public `agentveil` SDK plus a small local
+  `jobs_request` helper. It does not depend on other example files.
+- `webhook_receiver.py` is a tiny stdlib HTTP sink — it has no AVP-specific
+  logic; the payload it records is produced entirely by the AVP dispatcher.
 
 ---
 
@@ -144,39 +144,28 @@ No changes outside `proof_pack/` were made in Step 2.
   box. On Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to
   the `api` service or use the host bridge IP.
 - **`ENVIRONMENT=development`** is required in `.env` — production config
-  rejects non-HTTPS webhook URLs (`app/api/v1/alerts.py:42` → `validate_url`).
+  rejects non-HTTPS webhook URLs.
 - **Recompute timing**: the dispatcher fires synchronously during the compute
   job. If no alert lands in `07_webhook_alert.json`, check the job stdout
   (saved in `05_score_drop.json.recompute.stdout_tail`).
-- **Threshold 0.99** is intentionally high. Real deployments use ~0.5. With 0.99
-  any initial negative attestation crosses it. Do not carry this value forward
-  to any buyer-facing or public cut.
+- **Threshold 0.99** is intentionally high so the demo's first negative
+  attestation crosses it. Real deployments use a much lower value (around 0.5)
+  and should not reuse the demo threshold.
 - **Fresh DIDs per run.** Agents are not saved to disk (`save=False`). Run
   cleanup: `docker compose down -v` between runs if you want a clean slate.
 
 ---
 
-## Definition of done (Step 2)
+## What a successful run looks like
 
-All must hold on a clean run against local docker-compose:
+On a clean run against a local AVP backend:
 
-- [x] 9 JSON artifacts generated under `artifacts/`
-- [x] Artifact 05 shows before/after with non-equal scores
-- [x] Artifact 07 contains a real dispatcher payload delivered via HTTP
-- [x] Artifact 09 reports `valid: true`, `checked > 0`
-- [x] `verify_chain.py` imports only stdlib (no `agentveil`)
-- [x] Zero files changed outside `proof_pack/`
-- [x] Zero pushes to public `avp-sdk`
+- 9 JSON artifacts appear under `artifacts/`
+- Artifact `05_score_drop.json` shows different `before` and `after` scores
+- Artifact `07_webhook_alert.json` contains a real dispatcher payload
+- Artifact `09_chain_verification.json` reports `valid: true` with `checked > 0`
+- `verify_chain.py` runs against `08_audit_trail.json` with no AVP imports
 
-Mutation test (tamper with hash → expect `invalid`) is **not** a DoD gate —
-left as optional follow-up per Step 2 ground rules.
-
----
-
-## Next steps (not Step 2)
-
-- **Step 2.5** — derive a private buyer cut: remove recompute mechanics, admin
-  surfaces, internal thresholds; keep the runnable flow.
-- **Step 3** — derive a public sanitized cut: annotated walkthrough + reference
-  verifier + 5 curated artifacts + architecture boundary diagram. Push to
-  `avp-sdk` **only** after Codex review.
+Want a stronger guarantee? Tamper with any field of any entry in
+`08_audit_trail.json` and re-run `verify_chain.py` — it should report
+`invalid`.

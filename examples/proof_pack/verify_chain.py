@@ -7,7 +7,7 @@ Does NOT depend on the agentveil SDK — stdlib only.
     python verify_chain.py artifacts/08_audit_trail.json
     python verify_chain.py artifacts/08_audit_trail.json --verbose
 
-Hash formula (must match backend implementation in app/core/audit/chain.py):
+Hash formula (matches the AVP backend implementation):
 
     entry_hash = SHA256(
         previous_hash_or_empty

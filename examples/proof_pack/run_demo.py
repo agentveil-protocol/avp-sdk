@@ -8,7 +8,7 @@ Runs the full story arc end-to-end against a LOCAL AVP stack:
     -> offline chain verification
 
 Prerequisites:
-    1. Local AVP backend up via docker compose (from the `avp/` repo), with
+    1. A local AVP backend up via docker compose, with
        ENVIRONMENT=development so /v1/alerts accepts http:// webhooks.
     2. python webhook_receiver.py running on port 8765 (another terminal).
     3. pip install agentveil httpx pynacl base58
@@ -19,12 +19,12 @@ Run:
 
 Writes one JSON artifact per scene to ./artifacts/. See README.md.
 
-Step 2 ground rules (see ../PROOF_PACK_PLAN.md):
-  - Local docker-compose only (no prod).
-  - Real degradation + real recompute + real dispatcher.
-  - Do NOT hardcode container names — use `docker compose exec <service>`.
-  - Minimal copy of jobs-request helper rather than importing jobs_demo.py
-    (which has module-level prod URL + side effects).
+Notes:
+  - Local docker-compose only — the hosted instance does not accept http://
+    webhooks, so this walkthrough requires a development-mode backend.
+  - Real degradation + real recompute + real dispatcher (only the webhook
+    transport is local).
+  - Container names are not hardcoded — uses `docker compose exec <service>`.
 """
 
 from __future__ import annotations
