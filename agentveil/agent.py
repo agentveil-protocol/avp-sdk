@@ -306,10 +306,16 @@ class AVPAgent:
     ) -> dict:
         """
         Register agent on AVP and verify key ownership.
-        Does register + PoW + verify in one call.
+        Does register + PoW + verify in one call and returns as soon as
+        verification succeeds.
 
-        If capabilities are provided, the agent card is auto-created
-        and the onboarding pipeline starts immediately after verification.
+        SDK v0.6.0: this call NO LONGER blocks on onboarding completion.
+        If capabilities are provided, the agent card is auto-created and the
+        server starts the onboarding pipeline in the background. Use
+        `agent.get_onboarding_status()` to poll, `agent.wait_for_onboarding()`
+        to block until terminal state, or
+        `agent.auto_answer_onboarding_challenge()` to have the SDK reply to
+        the challenge automatically (previous pre-v0.6.0 implicit behavior).
 
         Args:
             display_name: Optional human-readable name
@@ -318,7 +324,7 @@ class AVPAgent:
             provider: LLM provider (e.g. "anthropic", "openai")
 
         Returns:
-            dict with 'did' and 'agnet_address'
+            dict with 'did', 'agnet_address', and 'onboarding_pending' (bool)
         """
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             # Step 1: Register (with optional card data)
@@ -369,24 +375,90 @@ class AVPAgent:
         self._is_verified = True
         self.save()
 
+        # SDK v0.6.0: register() NO LONGER blocks on onboarding completion.
+        # Server runs onboarding in the background after /verify.
+        # Clients that want LLM-assisted challenge auto-answer must call
+        # auto_answer_onboarding_challenge() explicitly.
+        # Clients that want to block until onboarding finishes must call
+        # wait_for_onboarding() explicitly.
         onboarding_started = verify_data.get("onboarding_started", False)
+        onboarding_pending = verify_data.get("onboarding_pending", onboarding_started)
         next_step = verify_data.get("next_step", "")
 
-        if onboarding_started or "Onboarding started" in next_step:
-            log.info(f"Registered, verified, card published, onboarding started: {self._did[:40]}...")
-            self._auto_handle_onboarding_challenge()
+        if onboarding_pending:
+            log.info(
+                f"Registered and verified. Onboarding running in background for "
+                f"{self._did[:40]}...  Poll onboarding_status() or call "
+                f"wait_for_onboarding() to observe completion."
+            )
         else:
-            log.warning(
-                f"Registered and verified but onboarding NOT started: "
-                f"no capabilities were provided. Call agent.publish_card("
-                f"capabilities=[...], provider='...') to start onboarding. "
-                f"Server response: {next_step}"
+            log.info(
+                f"Registered and verified. Onboarding NOT started "
+                f"(no capabilities provided). Call publish_card(...) to trigger. "
+                f"Server hint: {next_step}"
             )
 
+        # Expose the pending flag to callers inspecting the return value.
+        data["onboarding_pending"] = onboarding_pending
         return data
 
-    def _auto_handle_onboarding_challenge(self, max_wait: float = 30.0) -> None:
+    def auto_answer_onboarding_challenge(self, max_wait: float = 30.0) -> Optional[dict]:
         """
+        Opt-in helper: poll for the onboarding challenge and auto-submit a stock answer.
+
+        Previously wired into register() implicitly — as of SDK v0.6.0 this
+        is an explicit, opt-in call. Safe to ignore for integrators that
+        answer the challenge themselves.
+
+        Best-effort, non-fatal: returns challenge result dict on success,
+        or None if no challenge is available / an error occurred.
+        Challenge generation involves an LLM call and may take 5-15s.
+        """
+        return self._auto_handle_onboarding_challenge(max_wait=max_wait)
+
+    def wait_for_onboarding(
+        self, timeout: float = 60.0, poll_interval: float = 2.0
+    ) -> dict:
+        """
+        Opt-in helper: block until onboarding reaches a terminal state.
+
+        Polls GET /v1/onboarding/{did} until status is one of
+        'completed', 'failed', or 'not_started', or until the timeout is hit.
+
+        Returns the final onboarding status dict. Raises TimeoutError if
+        no terminal state is reached before the timeout.
+
+        IMPORTANT: `not_started` is treated as a terminal state here because
+        it means no session row exists, so there is nothing to wait for —
+        NOT because onboarding succeeded. Callers MUST inspect the returned
+        `status` explicitly. Only `"completed"` is a success outcome;
+        `"failed"` and `"not_started"` each need their own handling.
+        """
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
+        last: dict = {}
+        terminal = {"completed", "failed", "not_started"}
+        while _time.monotonic() < deadline:
+            try:
+                last = self.get_onboarding_status()
+            except Exception as e:
+                log.debug(f"wait_for_onboarding: status fetch failed ({e}); retrying")
+                _time.sleep(poll_interval)
+                continue
+            if (last.get("status") or "").lower() in terminal:
+                return last
+            _time.sleep(poll_interval)
+        raise TimeoutError(
+            f"Onboarding did not reach a terminal state within {timeout}s. "
+            f"Last status: {last.get('status')!r}"
+        )
+
+    def _auto_handle_onboarding_challenge(self, max_wait: float = 30.0) -> Optional[dict]:
+        """
+        Deprecated internal alias (SDK v0.6.0). Prefer
+        auto_answer_onboarding_challenge().
+
         Poll for an onboarding challenge and auto-submit an answer.
         Best-effort, non-fatal: if anything fails, registration still succeeds.
         Challenge generation involves LLM call and may take 5-15s after Stage 1.
@@ -421,13 +493,13 @@ class AVPAgent:
 
             if not challenge or challenge.get("status") != "awaiting_response":
                 log.debug("Auto-challenge: no active challenge found, skipping")
-                return
+                return None
 
             challenge_id = challenge.get("challenge_id", "")
             challenge_text = challenge.get("challenge_text", "")
 
             if not challenge_id or not challenge_text:
-                return
+                return None
 
             answer = (
                 f"Responding to challenge: {challenge_text[:200]}\n\n"
@@ -441,8 +513,10 @@ class AVPAgent:
                 f"Auto-challenge: score={result.get('score', '?')}, "
                 f"passed={result.get('passed', '?')}"
             )
+            return result
         except Exception as e:
             log.debug(f"Auto-challenge handling skipped: {e}")
+            return None
 
     # === DID Succession (key rotation) ===
 
@@ -577,8 +651,12 @@ class AVPAgent:
             to_did: DID of agent being rated
             outcome: "positive", "negative", or "neutral"
             weight: Confidence weight (0.0 to 1.0)
-            context: Interaction type (e.g. "task_completion")
-            evidence_hash: SHA256 of interaction log
+            context: Interaction type (e.g. "task_completion"). REQUIRED
+                when `outcome="negative"`.
+            evidence_hash: SHA-256 hex of interaction log (lowercase, 64 chars).
+                REQUIRED when `outcome="negative"`. The server rejects
+                negative attestations without justification — both `context`
+                and `evidence_hash` must be supplied together.
             is_private: If True, attestation is not publicly visible
             interaction_id: Optional UUID linking to a specific interaction
 
@@ -589,6 +667,28 @@ class AVPAgent:
             raise AVPValidationError(f"Invalid outcome: {outcome}. Must be positive/negative/neutral")
         if not 0.0 <= weight <= 1.0:
             raise AVPValidationError(f"Weight must be 0.0-1.0, got {weight}")
+        # Mirror server policy (app/api/v1/attestations.py): negative
+        # attestations require both context and a valid SHA-256 evidence_hash.
+        # Validate client-side so callers fail fast with a clear message
+        # instead of chasing a 400 from the server.
+        if outcome == "negative":
+            missing = []
+            if not context:
+                missing.append("context")
+            if not evidence_hash:
+                missing.append("evidence_hash")
+            if missing:
+                raise AVPValidationError(
+                    f"Negative attestations require {' and '.join(missing)}. "
+                    f"Pass context='task_completion' (or similar) and "
+                    f"evidence_hash=<sha256 hex of the interaction log>."
+                )
+            import re as _re
+            if not _re.match(r"^[a-f0-9]{64}$", evidence_hash):
+                raise AVPValidationError(
+                    "evidence_hash must be lowercase SHA-256 hex (64 chars). "
+                    "Got: " + (evidence_hash[:16] + "..." if len(evidence_hash) > 16 else evidence_hash)
+                )
 
         # Build and sign attestation payload
         attest_payload = json.dumps({

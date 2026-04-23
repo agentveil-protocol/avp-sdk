@@ -57,6 +57,35 @@ Reputation credentials are Ed25519-signed JWTs.
 Offline verification: AVPAgent.verify_credential(cred)
 does not require server access.
 
+## Starter Floor Semantics (Reputation)
+
+Newly-registered agents start with a pinned displayed score of **0.25**
+(`is_starter_score = true`, `algorithm_ver = "starter_v1"`). The floor
+persists until the agent **graduates**:
+
+- graduation requires **>= 3 trusted attesters** (attesters whose own
+  `flow_score > 0`), and
+- the raw computed signal crosses above the floor on the next batch
+  recompute cycle.
+
+While the floor is active, reputation-related API responses
+(`GET /v1/reputation/{did}`, `GET /v1/reputation/{did}/trust-check`)
+expose explicit explainability fields:
+
+- `score` — the displayed value (pinned at the floor when applicable).
+  Kept for backward compatibility; equals `display_score`.
+- `display_score` — same as `score`.
+- `raw_score` — the pre-floor computed signal, or `null` when the backend
+  does not store it separately (current default: `null` while floor applied).
+- `floor_applied` — boolean, `true` iff the displayed score diverges from
+  the raw signal because of the starter floor.
+- `floor_reason` — human-readable explanation when `floor_applied = true`.
+
+Decision semantics are unchanged: trust decisions (`allowed`, `tier`,
+`risk_level`) derive from the gated score. Negative attestations during
+the floor window still affect risk signals and tier computation, even
+when the displayed `score` does not visibly drop.
+
 ## What This Spec Covers
 
 This document covers the public protocol interface:

@@ -10,3 +10,6 @@ build/
 venv/
 .pytest_cache/
 *.cast
+
+# Proof Pack demo artifacts — generated on every `run_demo.py` run
+examples/proof_pack/artifacts/

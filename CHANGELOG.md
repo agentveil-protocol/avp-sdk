@@ -2,6 +2,91 @@
 
 All notable changes to the `agentveil` SDK.
 
+## [0.6.1] — 2026-04-23
+
+### Added (B3 — negative attestation DX)
+- `AVPAgent.attest()` now raises `AVPValidationError` client-side when
+  `outcome="negative"` is passed without both `context` and a valid SHA-256
+  `evidence_hash` (64 lowercase hex chars). Mirrors the server-side
+  requirement in `app/api/v1/attestations.py` so callers fail fast with a
+  clear message instead of chasing a 400 from the server.
+- Same validation added to `AVPMockAgent.attest()` so mock-mode code paths
+  surface the issue before hitting a real backend.
+- Docstring updated to mark `context` and `evidence_hash` as REQUIRED for
+  negative outcomes.
+
+### Added (B9 partial — explainability for starter floor)
+- `ReputationResponse` and `TrustCheckResponse` now expose explicit
+  `raw_score`, `display_score`, `floor_applied: bool`, `floor_reason` fields.
+- `TrustCheckResponse.reason` includes a human-readable `[starter floor
+  applied …]` suffix when applicable.
+- `docs/PROTOCOL.md` now has a "Starter Floor Semantics" section.
+
+### Known limitation
+- `raw_score` is `null` whenever the starter floor is applied. The backend
+  currently stores only the gated score, so the pre-floor signal is not
+  recoverable after the fact. `floor_applied = true` is the truthful signal;
+  `raw_score` exposure requires a DB migration tracked separately.
+
+### Not changed
+- Reputation computation, decision logic, `allowed` / `tier` / `risk_level`
+  semantics, and the single source-of-truth (`get_latest_score`).
+
+## [0.6.0] — 2026-04-23
+
+### Changed (behavior change — not backward compatible)
+- `register()` no longer blocks on onboarding completion. Onboarding runs
+  server-side in the background after `/verify`; the call returns as soon as
+  the agent is verified. Prior versions implicitly waited up to ~30s for an
+  LLM-driven onboarding challenge and auto-answered it.
+- `register()` return dict now includes `onboarding_pending: bool` so callers
+  can branch without polling.
+
+### Added
+- `auto_answer_onboarding_challenge(max_wait=30.0)` — explicit, opt-in helper
+  that reproduces the pre-v0.6.0 behavior (poll challenge, auto-submit a stock
+  answer). Returns the challenge result dict or `None`.
+- `wait_for_onboarding(timeout=60.0, poll_interval=2.0)` — explicit helper that
+  blocks until onboarding reaches a terminal state (`completed` / `failed` /
+  `not_started`). Raises `TimeoutError` on timeout.
+- Structured `challenge_expired` handling: backend now returns `409` with
+  `fresh_challenge` / `fresh_pow_challenge` / `fresh_pow_difficulty` in the
+  error body so clients can retry `/verify` without a new `/register` call.
+
+### Deprecated
+- `_auto_handle_onboarding_challenge()` — retained as an internal alias for
+  one release. New code must use `auto_answer_onboarding_challenge()`.
+
+### Migration
+- If you relied on the implicit onboarding wait inside `register()`, add an
+  explicit call to `agent.auto_answer_onboarding_challenge()` and/or
+  `agent.wait_for_onboarding()` after `register()`.
+- If you only care about registration being verified, no code change is
+  needed — `register()` now just returns faster.
+
+### Onboarding state semantics (explicit)
+`GET /v1/onboarding/{did}` — exact states returned:
+- Unknown DID → HTTP 404 "Agent not found".
+- Agent exists but `/verify` has not run yet (post-register, pre-verify) →
+  200 with `status="not_started"`. Synthetic response (no session row yet).
+- Agent verified, no card published, session waiting → 200 with
+  `status="pending"` (session row created at verify; pipeline idle).
+- Agent verified, card present, background pipeline running → 200 with
+  `status="in_progress"` + `current_stage`.
+- Terminal states → `status="completed"` or `status="failed"`.
+
+The `not_started` window is narrow (between `/register` and `/verify`) but
+real. Clients must treat `status` — not HTTP code — as the source of truth
+for onboarding lifecycle.
+
+### Performance note
+Latency numbers observed in local validation (register ~0.2s, 5 agents
+sequential ~1.4s total) were measured with `POW_DIFFICULTY_BITS=18` — the
+documented **development override**. Production default remains **28 bits**;
+real client-side PoW solve adds 10-150s on single-threaded CPUs depending
+on hardware. What v0.6.0 fixes is the **hidden onboarding-wait block**, not
+PoW latency. The two are independent; PoW ergonomics are tracked separately.
+
 ## [0.5.8] — 2026-04-22
 
 ### Changed

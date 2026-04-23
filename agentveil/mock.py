@@ -199,12 +199,31 @@ class AVPMockAgent(AVPAgent):
         Raises:
             AVPValidationError: If outcome is invalid or weight out of range
         """
+        from agentveil.exceptions import AVPValidationError
+
         if outcome not in ("positive", "negative", "neutral"):
-            from agentveil.exceptions import AVPValidationError
             raise AVPValidationError(f"Invalid outcome: {outcome}", 400, "")
         if not 0.0 <= weight <= 1.0:
-            from agentveil.exceptions import AVPValidationError
             raise AVPValidationError(f"Weight must be 0.0-1.0, got {weight}", 400, "")
+        # B3: mirror server + live SDK validation for negative attestations.
+        if outcome == "negative":
+            missing = []
+            if not context:
+                missing.append("context")
+            if not evidence_hash:
+                missing.append("evidence_hash")
+            if missing:
+                raise AVPValidationError(
+                    f"Negative attestations require {' and '.join(missing)}. "
+                    f"Pass context and evidence_hash (sha256 hex of the interaction log).",
+                    400, "",
+                )
+            import re as _re
+            if not _re.match(r"^[a-f0-9]{64}$", evidence_hash):
+                raise AVPValidationError(
+                    "evidence_hash must be lowercase SHA-256 hex (64 chars).",
+                    400, "",
+                )
 
         att_id = f"mock-att-{uuid.uuid4().hex[:8]}"
         self._mock_attestations.append({

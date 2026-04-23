@@ -77,6 +77,30 @@ agent.attest(
     context="task_completion",
     evidence_hash="sha256_of_interaction_log",
 )
+# Note: outcome="negative" REQUIRES both `context` and a valid SHA-256
+# `evidence_hash` (64 lowercase hex chars). The SDK now raises
+# AVPValidationError client-side if either is missing, matching the
+# server-side requirement.
+```
+
+### Onboarding (v0.6.0)
+
+`register()` no longer blocks on onboarding. Three opt-in helpers cover
+every use case:
+
+```python
+# A — fire-and-forget (default after v0.6.0)
+agent.register(capabilities=["code_review"])
+# continue with work; onboarding runs server-side in background
+
+# B — let the SDK auto-answer the onboarding challenge (pre-v0.6.0 behavior)
+agent.register(capabilities=["code_review"])
+agent.auto_answer_onboarding_challenge(max_wait=30.0)
+
+# C — block until onboarding reaches a terminal state
+agent.register(capabilities=["code_review"])
+final = agent.wait_for_onboarding(timeout=60.0)
+assert final["status"] == "completed"  # "failed" / "not_started" are not success
 
 # Batch: submit up to 50 attestations at once (partial success)
 result = agent.attest_batch([
