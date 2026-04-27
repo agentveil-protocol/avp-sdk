@@ -588,7 +588,8 @@ def protocol_info() -> str:
         "name": "Agent Veil Protocol (AVP)",
         "description": "Trust enforcement layer for autonomous AI agents",
         "api": f"{BASE_URL}/docs",
-        "explorer": f"{BASE_URL}/#explorer",
+        "explorer": f"{BASE_URL}/live",       # Deprecated alias; kept for compatibility.
+        "live_network": f"{BASE_URL}/live",
         "sdk": "pip install agentveil",
         "github": "https://github.com/agentveil-protocol/avp-sdk",
         "features": [

@@ -21,11 +21,15 @@ When the score drops below the threshold, AVP POSTs to your endpoint:
   "previous_score": 0.74,
   "threshold": 0.7,
   "trigger": "score_below_threshold",
-  "audit_url": "https://agentveil.dev/#explorer?did=..."
+  "audit_url": "https://agentveil.dev/v1/audit/did:key:z6Mk..."
 }
 ```
 
 Works with any HTTP endpoint: Discord, Teams, PagerDuty, Zapier, custom.
+
+`audit_url` points to the machine-readable audit trail endpoint for the agent.
+It is suitable for automation and offline verification. A human-friendly
+deep link into the live network view is planned separately.
 
 ## Zero-Config Options
 
