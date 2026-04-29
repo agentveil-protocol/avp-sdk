@@ -85,7 +85,13 @@ class TestFullLifecycle:
 
         rep_before = agent.get_reputation()["score"]
         for _ in range(3):
-            agent.attest(peer.did, outcome="negative", weight=1.0)
+            agent.attest(
+                peer.did,
+                outcome="negative",
+                weight=1.0,
+                context="mock_failure",
+                evidence_hash="a" * 64,
+            )
         rep_after = agent.get_reputation()["score"]
 
         assert rep_after < rep_before

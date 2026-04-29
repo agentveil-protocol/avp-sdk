@@ -22,6 +22,7 @@ from nacl.signing import SigningKey, VerifyKey
 
 from agentveil.auth import build_auth_header
 from agentveil.pow import solve_pow
+from agentveil.results import ControlledActionOutcome
 from agentveil.exceptions import (
     AVPError,
     AVPAuthError,
@@ -38,6 +39,7 @@ AGENTS_DIR = os.path.expanduser("~/.avp/agents")
 
 # Multicodec prefix for Ed25519 public key
 ED25519_MULTICODEC = bytes([0xED, 0x01])
+SUCCESS_STATUS_CODES = {200, 201}
 
 
 def _public_key_to_did(public_key: bytes) -> str:
@@ -46,6 +48,17 @@ def _public_key_to_did(public_key: bytes) -> str:
     multicodec_key = ED25519_MULTICODEC + public_key
     encoded = base58.b58encode(multicodec_key).decode("ascii")
     return f"did:key:z{encoded}"
+
+
+def _parse_retry_after(response: httpx.Response) -> int:
+    headers = getattr(response, "headers", {}) or {}
+    raw = headers.get("Retry-After", "60") if hasattr(headers, "get") else "60"
+    if not isinstance(raw, (str, int)):
+        return 60
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 60
 
 
 class AVPAgent:
@@ -264,13 +277,14 @@ class AVPAgent:
 
     def _handle_response(self, response: httpx.Response) -> dict:
         """Parse response and raise appropriate exceptions."""
-        if response.status_code == 200:
+        if response.status_code in SUCCESS_STATUS_CODES:
             try:
                 return response.json()
             except (json.JSONDecodeError, ValueError):
                 raise AVPServerError(
-                    f"Server returned non-JSON response (status 200): {response.text[:200]}",
-                    200, response.text[:200],
+                    f"Server returned non-JSON response (status {response.status_code}): "
+                    f"{response.text[:200]}",
+                    response.status_code, response.text[:200],
                 )
 
         try:
@@ -287,13 +301,60 @@ class AVPAgent:
         elif response.status_code == 409:
             raise AVPValidationError(f"Conflict: {detail}", 409, detail)
         elif response.status_code == 429:
-            raise AVPRateLimitError(f"Rate limited: {detail}")
+            retry_after = _parse_retry_after(response)
+            raise AVPRateLimitError(f"Rate limited: {detail}", retry_after=retry_after)
         elif response.status_code == 400:
             raise AVPValidationError(f"Validation error: {detail}", 400, detail)
         elif response.status_code >= 500:
             raise AVPServerError(f"Server error: {detail}", response.status_code, detail)
         else:
             raise AVPError(f"Unexpected error ({response.status_code}): {detail}", response.status_code, detail)
+
+    def _handle_raw_json_response(self, response: httpx.Response) -> str:
+        """Return an exact JSON response body after normal status/error handling.
+
+        Execution and human-approval receipt endpoints return signed JCS JSON
+        where the exact response bytes are the proof artifact. This helper
+        validates that the body is JSON but returns ``response.text`` unchanged.
+        """
+        if response.status_code in SUCCESS_STATUS_CODES:
+            try:
+                response.json()
+            except (json.JSONDecodeError, ValueError):
+                raise AVPServerError(
+                    f"Server returned non-JSON response (status {response.status_code}): "
+                    f"{response.text[:200]}",
+                    response.status_code, response.text[:200],
+                )
+            return response.text
+        self._handle_response(response)
+        raise AVPServerError("unreachable response handling state")
+
+    def _post_json(self, path: str, body_data: dict) -> dict:
+        body = json.dumps(body_data).encode()
+        headers = self._auth_headers("POST", path, body)
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.post(path, content=body, headers=headers)
+            return self._handle_response(r)
+
+    def _post_raw_json(self, path: str, body_data: Optional[dict] = None) -> str:
+        body = b"" if body_data is None else json.dumps(body_data).encode()
+        headers = self._auth_headers("POST", path, body)
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.post(path, content=body, headers=headers)
+            return self._handle_raw_json_response(r)
+
+    def _get_json(self, path: str, params: Optional[dict] = None) -> dict:
+        headers = self._auth_headers("GET", path)
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.get(path, params=params, headers=headers)
+            return self._handle_response(r)
+
+    def _get_raw_json(self, path: str) -> str:
+        headers = self._auth_headers("GET", path)
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+            r = c.get(path, headers=headers)
+            return self._handle_raw_json_response(r)
 
     # === Registration ===
 
@@ -876,6 +937,315 @@ class AVPAgent:
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             r = c.get(f"/v1/reputation/{target}/tracks")
             return self._handle_response(r)
+
+    # === Runtime Control ===
+
+    def runtime_evaluate(
+        self,
+        action: str,
+        resource: str,
+        environment: str,
+        delegation_receipt: dict,
+        amount: Optional[float] = None,
+        currency: Optional[str] = None,
+    ) -> dict:
+        """
+        Evaluate whether this agent may perform one action right now.
+
+        The agent DID is always derived from this SDK identity; callers cannot
+        override it. The returned decision is one of ALLOW, BLOCK, or
+        WAITING_FOR_HUMAN_APPROVAL.
+        """
+        body_data = {
+            "agent_did": self._did,
+            "action": action,
+            "resource": resource,
+            "environment": environment,
+            "receipt": delegation_receipt,
+        }
+        if amount is not None:
+            body_data["amount"] = amount
+        if currency is not None:
+            body_data["currency"] = currency
+        return self._post_json("/v1/runtime/evaluate", body_data)
+
+    def get_runtime_decision(self, audit_id: str) -> dict:
+        """Fetch this agent's Runtime Gate decision by audit_id."""
+        return self._get_json(f"/v1/runtime/decisions/{audit_id}")
+
+    def execute(
+        self,
+        audit_id: str,
+        action: str,
+        resource: str,
+        environment: str,
+        params: Optional[dict] = None,
+        approval_id: Optional[str] = None,
+    ) -> str:
+        """
+        Execute an approved Runtime Gate decision.
+
+        Returns the exact signed execution receipt JSON text. Keep this string
+        for offline proof; parsing and re-serializing changes the bytes.
+        """
+        body_data = {
+            "audit_id": audit_id,
+            "action": action,
+            "resource": resource,
+            "environment": environment,
+            "params": params or {},
+        }
+        if approval_id is not None:
+            body_data["approval_id"] = approval_id
+        return self._post_raw_json("/v1/execute", body_data)
+
+    def get_execution_receipt(self, receipt_id: str) -> str:
+        """Fetch the exact signed execution receipt JSON text."""
+        return self._get_raw_json(f"/v1/execution/receipts/{receipt_id}")
+
+    # === Human Approval ===
+
+    def create_approval(
+        self,
+        audit_id: str,
+        delegation_receipt: dict,
+        expires_in_seconds: int = 3600,
+    ) -> dict:
+        """Create or fetch a human approval request for a WAITING decision."""
+        body_data = {
+            "audit_id": audit_id,
+            "delegation_receipt": delegation_receipt,
+            "expires_in_seconds": expires_in_seconds,
+        }
+        return self._post_json("/v1/human-approvals", body_data)
+
+    def get_approval(self, approval_id: str) -> dict:
+        """Fetch a human approval request visible to this agent."""
+        return self._get_json(f"/v1/human-approvals/{approval_id}")
+
+    def approve(self, approval_id: str) -> str:
+        """
+        Approve a human approval request as the principal.
+
+        Returns the exact signed approval receipt JSON text.
+        """
+        return self._post_raw_json(f"/v1/human-approvals/{approval_id}/approve")
+
+    def deny(self, approval_id: str, reason: Optional[str] = None) -> str:
+        """
+        Deny a human approval request as the principal.
+
+        Returns the exact signed denial receipt JSON text.
+        """
+        body_data = {"reason": reason} if reason is not None else None
+        return self._post_raw_json(f"/v1/human-approvals/{approval_id}/deny", body_data)
+
+    # === Governance ===
+
+    def create_governance_policy(self, name: str, rules_jsonb: dict) -> dict:
+        """Create a DRAFT governance policy owned by this agent."""
+        return self._post_json(
+            "/v1/governance/policies",
+            {"name": name, "rules_jsonb": rules_jsonb},
+        )
+
+    def get_governance_policy(self, policy_id: str) -> dict:
+        """Fetch this agent's governance policy by id."""
+        return self._get_json(f"/v1/governance/policies/{policy_id}")
+
+    def activate_governance_policy(self, policy_id: str) -> dict:
+        """Activate one of this agent's governance policies."""
+        return self._post_json(f"/v1/governance/policies/{policy_id}/activate", {})
+
+    def create_governance_risk_event(
+        self,
+        target_agent_did: str,
+        event_type: str,
+        severity: str,
+        occurred_at: str,
+        evidence_hash: Optional[str] = None,
+    ) -> dict:
+        """Record a governance risk event. reporter_did is server-derived."""
+        body_data = {
+            "target_agent_did": target_agent_did,
+            "event_type": event_type,
+            "severity": severity,
+            "occurred_at": occurred_at,
+        }
+        if evidence_hash is not None:
+            body_data["evidence_hash"] = evidence_hash
+        return self._post_json("/v1/governance/risk-events", body_data)
+
+    # === Remediation ===
+
+    def create_remediation_case(
+        self,
+        case_type: str,
+        reason: str,
+        category: str,
+        evidence_hash: Optional[str] = None,
+        **references,
+    ) -> dict:
+        """
+        Open a remediation case.
+
+        Pass exactly the immutable reference required by the case type, such as
+        execution_receipt_id, approval_id, attestation_id, or
+        governance_risk_event_id. Party DIDs are server-derived.
+        """
+        body_data = {
+            "case_type": case_type,
+            "reason": reason,
+            "category": category,
+        }
+        if evidence_hash is not None:
+            body_data["evidence_hash"] = evidence_hash
+        allowed_references = {
+            "execution_receipt_id",
+            "approval_id",
+            "runtime_gate_audit_id",
+            "attestation_id",
+            "attestation_dispute_id",
+            "governance_risk_event_id",
+            "arbitrator_did",
+        }
+        for key, value in references.items():
+            if key not in allowed_references:
+                raise AVPValidationError(f"Unknown remediation reference field: {key}")
+            if value is not None:
+                body_data[key] = value
+        return self._post_json("/v1/remediation/cases", body_data)
+
+    def list_remediation_cases(
+        self,
+        role: str = "party",
+        status: Optional[str] = None,
+        case_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """List remediation cases visible to this agent."""
+        params = {"role": role, "limit": limit, "offset": offset}
+        if status is not None:
+            params["status"] = status
+        if case_type is not None:
+            params["case_type"] = case_type
+        return self._get_json("/v1/remediation/cases", params=params)
+
+    def get_remediation_case(self, case_id: str) -> dict:
+        """Fetch one remediation case visible to this agent."""
+        return self._get_json(f"/v1/remediation/cases/{case_id}")
+
+    def add_remediation_evidence(
+        self,
+        case_id: str,
+        reference_type: str,
+        evidence_hash: Optional[str] = None,
+        reference_uri: Optional[str] = None,
+        summary_jsonb: Optional[dict] = None,
+    ) -> dict:
+        """Append evidence metadata to an open remediation case."""
+        body_data = {"reference_type": reference_type}
+        if evidence_hash is not None:
+            body_data["evidence_hash"] = evidence_hash
+        if reference_uri is not None:
+            body_data["reference_uri"] = reference_uri
+        if summary_jsonb is not None:
+            body_data["summary_jsonb"] = summary_jsonb
+        return self._post_json(f"/v1/remediation/cases/{case_id}/evidence", body_data)
+
+    # === Controlled Action Orchestration ===
+
+    def controlled_action(
+        self,
+        action: str,
+        resource: str,
+        environment: str,
+        delegation_receipt: dict,
+        params: Optional[dict] = None,
+        amount: Optional[float] = None,
+        currency: Optional[str] = None,
+        approval_expires_in_seconds: int = 3600,
+    ) -> ControlledActionOutcome:
+        """
+        Run the buyer-friendly controlled-action flow without bypassing AVP.
+
+        Returns a ControlledActionOutcome with status:
+          - executed
+          - approval_required
+          - blocked
+
+        Human approval is never auto-approved. If approval is required, call
+        execute_after_approval(...) after the principal approves the request.
+        """
+        decision = self.runtime_evaluate(
+            action=action,
+            resource=resource,
+            environment=environment,
+            delegation_receipt=delegation_receipt,
+            amount=amount,
+            currency=currency,
+        )
+        gate_decision = decision.get("decision")
+
+        if gate_decision == "ALLOW":
+            receipt_jcs = self.execute(
+                audit_id=decision["audit_id"],
+                action=action,
+                resource=resource,
+                environment=environment,
+                params=params or {},
+            )
+            return ControlledActionOutcome(
+                status="executed",
+                decision=decision,
+                receipt_jcs=receipt_jcs,
+                receipt=json.loads(receipt_jcs),
+            )
+
+        if gate_decision == "WAITING_FOR_HUMAN_APPROVAL":
+            approval = self.create_approval(
+                audit_id=decision["audit_id"],
+                delegation_receipt=delegation_receipt,
+                expires_in_seconds=approval_expires_in_seconds,
+            )
+            return ControlledActionOutcome(
+                status="approval_required",
+                decision=decision,
+                approval=approval,
+            )
+
+        return ControlledActionOutcome(
+            status="blocked",
+            decision=decision,
+            reason=decision.get("reason", "runtime_gate_blocked"),
+        )
+
+    def execute_after_approval(
+        self,
+        audit_id: str,
+        approval_id: str,
+        action: str,
+        resource: str,
+        environment: str,
+        params: Optional[dict] = None,
+    ) -> ControlledActionOutcome:
+        """Resume a controlled action after the principal approved it."""
+        receipt_jcs = self.execute(
+            audit_id=audit_id,
+            action=action,
+            resource=resource,
+            environment=environment,
+            params=params or {},
+            approval_id=approval_id,
+        )
+        return ControlledActionOutcome(
+            status="executed",
+            audit_id=audit_id,
+            approval_id=approval_id,
+            receipt_jcs=receipt_jcs,
+            receipt=json.loads(receipt_jcs),
+        )
 
     def get_reputation_velocity(self, did: Optional[str] = None) -> dict:
         """

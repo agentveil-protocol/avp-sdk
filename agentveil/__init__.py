@@ -14,6 +14,7 @@ Usage:
 
 from agentveil.agent import AVPAgent
 from agentveil.mock import AVPMockAgent
+from agentveil.results import ControlledActionOutcome
 from agentveil.tracked import avp_tracked, clear_agent_cache
 from agentveil.exceptions import (
     AVPError,
@@ -29,6 +30,7 @@ __version__ = "0.6.1"
 __all__ = [
     "AVPAgent",
     "AVPMockAgent",
+    "ControlledActionOutcome",
     "avp_tracked",
     "clear_agent_cache",
     "AVPError",

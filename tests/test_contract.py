@@ -219,3 +219,177 @@ class TestCardContract:
             )
 
         assert captured["body"].get("signature") == "abcdef1234567890"
+
+
+class TestRuntimeControlContract:
+    """Verify Layer 6/7/8/9 SDK wrappers match backend request contracts."""
+
+    def test_runtime_evaluate_derives_agent_did_from_sdk_identity(self):
+        agent = _make_agent()
+        captured = {}
+
+        def mock_post(url, **kwargs):
+            captured["url"] = url
+            captured["body"] = json.loads(kwargs.get("content", b"{}"))
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.json.return_value = {
+                "audit_id": "urn:uuid:11111111-1111-1111-1111-111111111111",
+                "decision": "ALLOW",
+            }
+            return resp
+
+        receipt = {"id": "urn:uuid:receipt", "credentialSubject": {"id": agent.did}}
+        with patch.object(httpx.Client, "post", side_effect=mock_post):
+            result = agent.runtime_evaluate(
+                action="infra.resource.inspect",
+                resource="resource:1",
+                environment="development",
+                delegation_receipt=receipt,
+            )
+
+        assert captured["url"] == "/v1/runtime/evaluate"
+        assert captured["body"]["agent_did"] == agent.did
+        assert captured["body"]["receipt"] == receipt
+        assert result["decision"] == "ALLOW"
+
+    def test_execute_returns_exact_raw_receipt_text(self):
+        agent = _make_agent()
+        captured = {}
+        raw = '{"receipt_id":"urn:uuid:22222222-2222-2222-2222-222222222222","status":"SUCCESS"}'
+
+        def mock_post(url, **kwargs):
+            captured["url"] = url
+            captured["body"] = json.loads(kwargs.get("content", b"{}"))
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.text = raw
+            resp.json.return_value = {"receipt_id": "urn:uuid:22222222-2222-2222-2222-222222222222"}
+            return resp
+
+        with patch.object(httpx.Client, "post", side_effect=mock_post):
+            result = agent.execute(
+                audit_id="urn:uuid:11111111-1111-1111-1111-111111111111",
+                action="infra.resource.inspect",
+                resource="resource:1",
+                environment="development",
+                params={"resource_id": "resource:1"},
+            )
+
+        assert captured["url"] == "/v1/execute"
+        assert captured["body"]["params"] == {"resource_id": "resource:1"}
+        assert result == raw
+
+    def test_create_approval_sends_full_delegation_receipt(self):
+        agent = _make_agent()
+        captured = {}
+
+        def mock_post(url, **kwargs):
+            captured["url"] = url
+            captured["body"] = json.loads(kwargs.get("content", b"{}"))
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.json.return_value = {"id": "urn:uuid:approval", "status": "PENDING"}
+            return resp
+
+        receipt = {"id": "urn:uuid:receipt", "issuer": "did:key:z6MkIssuer"}
+        with patch.object(httpx.Client, "post", side_effect=mock_post):
+            result = agent.create_approval(
+                audit_id="urn:uuid:11111111-1111-1111-1111-111111111111",
+                delegation_receipt=receipt,
+                expires_in_seconds=600,
+            )
+
+        assert captured["url"] == "/v1/human-approvals"
+        assert captured["body"]["delegation_receipt"] == receipt
+        assert captured["body"]["expires_in_seconds"] == 600
+        assert result["status"] == "PENDING"
+
+    def test_approve_posts_empty_body_and_returns_raw_receipt(self):
+        agent = _make_agent()
+        captured = {}
+        raw = '{"approval_id":"urn:uuid:approval","decision":"APPROVED"}'
+
+        def mock_post(url, **kwargs):
+            captured["url"] = url
+            captured["content"] = kwargs.get("content")
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.text = raw
+            resp.json.return_value = {"approval_id": "urn:uuid:approval", "decision": "APPROVED"}
+            return resp
+
+        with patch.object(httpx.Client, "post", side_effect=mock_post):
+            result = agent.approve("urn:uuid:approval")
+
+        assert captured["url"] == "/v1/human-approvals/urn:uuid:approval/approve"
+        assert captured["content"] == b""
+        assert result == raw
+
+    def test_create_governance_policy_accepts_201(self):
+        agent = _make_agent()
+        captured = {}
+
+        def mock_post(url, **kwargs):
+            captured["url"] = url
+            captured["body"] = json.loads(kwargs.get("content", b"{}"))
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 201
+            resp.json.return_value = {"id": "policy-1", "status": "DRAFT"}
+            return resp
+
+        rules = {"rules": []}
+        with patch.object(httpx.Client, "post", side_effect=mock_post):
+            result = agent.create_governance_policy("buyer-default", rules)
+
+        assert captured["url"] == "/v1/governance/policies"
+        assert captured["body"] == {"name": "buyer-default", "rules_jsonb": rules}
+        assert result["status"] == "DRAFT"
+
+    def test_list_remediation_cases_uses_signed_get_with_filters(self):
+        agent = _make_agent()
+        captured = {}
+
+        def mock_get(url, **kwargs):
+            captured["url"] = url
+            captured["params"] = kwargs.get("params")
+            captured["headers"] = kwargs.get("headers")
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.json.return_value = {"items": [], "count": 0, "has_more": False}
+            return resp
+
+        with patch.object(httpx.Client, "get", side_effect=mock_get):
+            result = agent.list_remediation_cases(
+                role="arbitrator",
+                status="OPEN",
+                case_type="execution_outcome_dispute",
+                limit=10,
+                offset=5,
+            )
+
+        assert captured["url"] == "/v1/remediation/cases"
+        assert captured["params"] == {
+            "role": "arbitrator",
+            "limit": 10,
+            "offset": 5,
+            "status": "OPEN",
+            "case_type": "execution_outcome_dispute",
+        }
+        assert "Authorization" in captured["headers"]
+        assert result["count"] == 0
+
+    def test_create_remediation_case_rejects_unknown_reference_field(self):
+        agent = _make_agent()
+
+        try:
+            agent.create_remediation_case(
+                case_type="execution_outcome_dispute",
+                reason="execution result did not match expected outcome",
+                category="execution",
+                respondent_did="did:key:z6MkInjected",
+            )
+        except Exception as exc:
+            assert "Unknown remediation reference field" in str(exc)
+        else:
+            raise AssertionError("unknown remediation reference field was accepted")

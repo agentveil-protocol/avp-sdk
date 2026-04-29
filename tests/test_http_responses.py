@@ -14,15 +14,16 @@ from agentveil.exceptions import (
 )
 
 
-def _make_response(status_code: int, json_data=None, text=""):
+def _make_response(status_code: int, json_data=None, text="", headers=None):
     """Create a mock httpx.Response."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
+    resp.headers = headers or {}
     if json_data is not None:
         resp.json.return_value = json_data
     else:
-        resp.json.side_effect = Exception("no json")
+        resp.json.side_effect = ValueError("no json")
     return resp
 
 
@@ -36,6 +37,35 @@ class TestHandleResponse:
         resp = _make_response(200, {"status": "ok"})
         result = self.agent._handle_response(resp)
         assert result == {"status": "ok"}
+
+    def test_201_returns_json(self):
+        resp = _make_response(201, {"id": "case-1", "status": "OPEN"})
+        result = self.agent._handle_response(resp)
+        assert result == {"id": "case-1", "status": "OPEN"}
+
+    def test_raw_json_response_preserves_exact_text(self):
+        raw = '{"proof":{"type":"DataIntegrityProof"},"receipt_id":"urn:uuid:abc"}'
+        resp = _make_response(200, {"receipt_id": "urn:uuid:abc"}, text=raw)
+        result = self.agent._handle_raw_json_response(resp)
+        assert result == raw
+
+    def test_raw_json_response_preserves_spacing_and_trailing_whitespace(self):
+        raw = '{  "receipt_id" : "urn:uuid:abc", "status" : "SUCCESS"  }\n  '
+        resp = _make_response(200, {"receipt_id": "urn:uuid:abc"}, text=raw)
+        result = self.agent._handle_raw_json_response(resp)
+        assert result == raw
+
+    def test_raw_json_response_accepts_201(self):
+        raw = '{"id":"urn:uuid:case","status":"OPEN"}'
+        resp = _make_response(201, {"id": "urn:uuid:case", "status": "OPEN"}, text=raw)
+        result = self.agent._handle_raw_json_response(resp)
+        assert result == raw
+
+    def test_raw_json_response_rejects_non_json_success(self):
+        resp = _make_response(200, json_data=None, text="not json")
+        with pytest.raises(AVPServerError) as exc_info:
+            self.agent._handle_raw_json_response(resp)
+        assert exc_info.value.status_code == 200
 
     def test_401_raises_auth_error(self):
         resp = _make_response(401, {"detail": "bad signature"})
@@ -62,9 +92,14 @@ class TestHandleResponse:
         assert exc_info.value.status_code == 409
 
     def test_429_raises_rate_limit(self):
-        resp = _make_response(429, {"detail": "too many requests"})
-        with pytest.raises(AVPRateLimitError):
+        resp = _make_response(
+            429,
+            {"detail": "too many requests"},
+            headers={"Retry-After": "17"},
+        )
+        with pytest.raises(AVPRateLimitError) as exc_info:
             self.agent._handle_response(resp)
+        assert exc_info.value.retry_after == 17
 
     def test_400_raises_validation_error(self):
         resp = _make_response(400, {"detail": "invalid input"})

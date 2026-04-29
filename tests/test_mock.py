@@ -67,7 +67,13 @@ class TestMockAttestation:
 
     def test_negative_attestation(self, mock_agent_pair):
         a, b = mock_agent_pair
-        result = a.attest(b.did, outcome="negative", weight=0.5)
+        result = a.attest(
+            b.did,
+            outcome="negative",
+            weight=0.5,
+            context="mock_failure",
+            evidence_hash="a" * 64,
+        )
         assert result["outcome"] == "negative"
 
     def test_neutral_attestation(self, mock_agent_pair):
@@ -93,7 +99,13 @@ class TestMockAttestation:
     def test_negative_attestation_decreases_reputation(self, mock_agent_pair):
         a, b = mock_agent_pair
         rep_before = a.get_reputation()["score"]
-        a.attest(b.did, outcome="negative", weight=1.0)
+        a.attest(
+            b.did,
+            outcome="negative",
+            weight=1.0,
+            context="mock_failure",
+            evidence_hash="a" * 64,
+        )
         rep_after = a.get_reputation()["score"]
         assert rep_after < rep_before
 
