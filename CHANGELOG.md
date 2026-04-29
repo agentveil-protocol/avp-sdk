@@ -12,6 +12,8 @@ All notable changes to the `agentveil` SDK.
 - Typed `IntegrationPreflightReport` with customer-clear statuses such as
   `ready`, `unregistered`, `signature_invalid`, `unverified_or_forbidden`,
   `agent_suspended`, `rate_limited`, and `backend_or_config_unavailable`.
+- `examples/first_controlled_action.py` template for the first preflight-gated
+  controlled action with explicit DelegationReceipt handoff.
 
 ### Changed
 - Signed SDK requests with non-empty query parameters now emit AVP-Sig v2,

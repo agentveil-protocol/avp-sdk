@@ -67,6 +67,11 @@ Use `can_trust()` before selecting an agent, then issue or obtain a DelegationRe
 
 ## First Controlled Action
 
+Use `examples/first_controlled_action.py` as the customer template. By default
+it only loads identity and runs preflight. It calls `controlled_action(...)`
+only when `AVP_RUN_CONTROLLED_ACTION=1` and a DelegationReceipt is supplied via
+`AVP_DELEGATION_RECEIPT_FILE` or `AVP_DELEGATION_RECEIPT_JSON`.
+
 ```python
 from agentveil import AVPAgent, ControlledActionOutcome
 
@@ -90,6 +95,11 @@ elif result.status == "blocked":
 ```
 
 `controlled_action()` never auto-approves. If approval is required, the principal must approve the request with their own DID.
+
+The first-action template intentionally does not generate a DelegationReceipt
+for you. In production, the principal or workflow owner issues it after
+selecting the agent and defining the allowed action scope. Put that signed
+receipt in `AVP_DELEGATION_RECEIPT_FILE` or `AVP_DELEGATION_RECEIPT_JSON`.
 
 ## Approval Resume Path
 
