@@ -7,6 +7,18 @@ from typing import Any, Literal, Optional
 
 
 ControlledActionStatus = Literal["executed", "approval_required", "blocked"]
+IntegrationPreflightStatus = Literal[
+    "ready",
+    "api_unreachable",
+    "api_degraded",
+    "unregistered",
+    "signature_invalid",
+    "unverified_or_forbidden",
+    "agent_suspended",
+    "rate_limited",
+    "backend_or_config_unavailable",
+    "unexpected_response",
+]
 
 
 @dataclass(frozen=True)
@@ -57,4 +69,66 @@ class ControlledActionOutcome:
         return data
 
 
-__all__ = ["ControlledActionOutcome", "ControlledActionStatus"]
+@dataclass(frozen=True)
+class IntegrationPreflightReport:
+    """Safety-preserving readiness check before first integration."""
+
+    ready: bool
+    status: IntegrationPreflightStatus
+    next_action: str
+    did: str
+    base_url: str
+    local_identity_ok: bool = True
+    api_reachable: bool = False
+    registered: Optional[bool] = None
+    verified: Optional[bool] = None
+    agent_status: Optional[str] = None
+    signed_request_ok: bool = False
+    status_code: Optional[int] = None
+    detail: Optional[str] = None
+    retry_after: Optional[int] = None
+
+    def __getitem__(self, key: str) -> Any:
+        if not hasattr(self, key):
+            raise KeyError(key)
+        value = getattr(self, key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if not hasattr(self, key):
+            return default
+        value = getattr(self, key)
+        return default if value is None else value
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        for key in (
+            "ready",
+            "status",
+            "next_action",
+            "did",
+            "base_url",
+            "local_identity_ok",
+            "api_reachable",
+            "registered",
+            "verified",
+            "agent_status",
+            "signed_request_ok",
+            "status_code",
+            "detail",
+            "retry_after",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
+
+
+__all__ = [
+    "ControlledActionOutcome",
+    "ControlledActionStatus",
+    "IntegrationPreflightReport",
+    "IntegrationPreflightStatus",
+]

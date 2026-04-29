@@ -31,6 +31,40 @@ Operator/backend:
 
 If execution or human approval signing keys are missing, the backend fails closed with `503` before state changes.
 
+## Setup Checklist
+
+Before the first controlled action:
+
+1. Create or load the local agent identity.
+2. Register and verify the agent DID with the AVP API.
+3. Obtain a DelegationReceipt for the intended action scope.
+4. Call `controlled_action(...)`.
+5. Store `receipt_jcs` if the action executes.
+6. If approval is required, route approval to the principal and resume with `execute_after_approval(...)`.
+7. If blocked, surface the reason and do not execute the action.
+
+Creating a local DID/key is not enough by itself. The production API must know and verify that DID before signed runtime requests can succeed.
+
+## Integration Preflight
+
+Run preflight before the first controlled action:
+
+```python
+report = agent.integration_preflight()
+
+if not report.ready:
+    print(report.status)
+    print(report.next_action)
+```
+
+Preflight checks API reachability, public DID registration status, verification status when visible, and one safe signed read request. It does not call Runtime Gate, approve actions, or execute actions.
+
+## DelegationReceipt Source
+
+A DelegationReceipt is issued by the principal or workflow owner that authorizes the agent to request a bounded action. It should name the agent DID, the allowed action/resource/environment scope, and the validity window.
+
+Use `can_trust()` before selecting an agent, then issue or obtain a DelegationReceipt for the selected agent before calling `controlled_action(...)`. Reputation helps selection; delegation authorizes the runtime action.
+
 ## First Controlled Action
 
 ```python
@@ -106,17 +140,20 @@ Use these when your application wants to own orchestration:
 
 Runtime `BLOCK` is not an HTTP error. It is a safety decision returned by Runtime Gate or Governance.
 
-## Compliance Packet
+## Proof Retention Checklist
 
 For a security/compliance review, retain:
 
-- agent DID and public key
 - DelegationReceipt
-- Runtime Gate decision and `audit_id`
-- governance `policy_version` and `policy_context_hash`, when present
-- signed approval receipt, when used
-- signed execution receipt
-- remediation case and evidence hashes, when contested
+- Runtime Gate `audit_id`
+- raw signed execution receipt (`receipt_jcs`)
+- signed approval receipt, if used
+- remediation case and evidence hashes, if contested
+
+Also retain when available:
+
+- agent DID and public key
+- governance `policy_version` and `policy_context_hash`
 - `/v1/audit/verify` result for audit-chain integrity
 
 Signed execution and approval receipts are immutable proof artifacts. Remediation can reference them, but cannot rewrite them.

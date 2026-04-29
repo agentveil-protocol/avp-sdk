@@ -22,7 +22,7 @@ from nacl.signing import SigningKey, VerifyKey
 
 from agentveil.auth import build_auth_header
 from agentveil.pow import solve_pow
-from agentveil.results import ControlledActionOutcome
+from agentveil.results import ControlledActionOutcome, IntegrationPreflightReport
 from agentveil.exceptions import (
     AVPError,
     AVPAuthError,
@@ -59,6 +59,16 @@ def _parse_retry_after(response: httpx.Response) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 60
+
+
+def _response_detail(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            return str(data.get("detail", response.text))
+    except Exception:
+        pass
+    return response.text
 
 
 class AVPAgent:
@@ -355,6 +365,242 @@ class AVPAgent:
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
             r = c.get(path, headers=headers)
             return self._handle_raw_json_response(r)
+
+    def integration_preflight(self) -> IntegrationPreflightReport:
+        """Check integration readiness without mutating backend state.
+
+        The preflight uses a public health check, public agent lookup, and one
+        signed auth-only read (`GET /v1/remediation/cases`) with no query
+        parameters. It does not call Runtime Gate and does not approve or
+        execute actions.
+        """
+
+        def report(
+            ready: bool,
+            status: str,
+            next_action: str,
+            *,
+            api_reachable: bool = False,
+            registered: Optional[bool] = None,
+            verified: Optional[bool] = None,
+            agent_status: Optional[str] = None,
+            signed_request_ok: bool = False,
+            status_code: Optional[int] = None,
+            detail: Optional[str] = None,
+            retry_after: Optional[int] = None,
+        ) -> IntegrationPreflightReport:
+            return IntegrationPreflightReport(
+                ready=ready,
+                status=status,  # type: ignore[arg-type]
+                next_action=next_action,
+                did=self._did,
+                base_url=self._base_url,
+                api_reachable=api_reachable,
+                registered=registered,
+                verified=verified,
+                agent_status=agent_status,
+                signed_request_ok=signed_request_ok,
+                status_code=status_code,
+                detail=detail,
+                retry_after=retry_after,
+            )
+
+        registered: Optional[bool] = None
+        verified: Optional[bool] = None
+        agent_status: Optional[str] = None
+
+        try:
+            with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
+                health = c.get("/v1/health")
+                if health.status_code >= 500:
+                    return report(
+                        False,
+                        "backend_or_config_unavailable",
+                        "Check AVP API health and backend configuration before retrying.",
+                        api_reachable=True,
+                        status_code=health.status_code,
+                        detail=_response_detail(health),
+                    )
+                if health.status_code not in SUCCESS_STATUS_CODES:
+                    return report(
+                        False,
+                        "unexpected_response",
+                        "Check base_url and AVP API health endpoint.",
+                        api_reachable=True,
+                        status_code=health.status_code,
+                        detail=_response_detail(health),
+                    )
+                try:
+                    health_data = health.json()
+                except Exception:
+                    health_data = {}
+                if isinstance(health_data, dict) and health_data.get("status") == "degraded":
+                    return report(
+                        False,
+                        "api_degraded",
+                        "AVP API is reachable but degraded; wait for backend health to recover.",
+                        api_reachable=True,
+                        status_code=health.status_code,
+                        detail=str(health_data),
+                    )
+
+                agent_lookup = c.get(f"/v1/agents/{self._did}")
+                if agent_lookup.status_code in SUCCESS_STATUS_CODES:
+                    try:
+                        data = agent_lookup.json()
+                    except Exception:
+                        return report(
+                            False,
+                            "unexpected_response",
+                            "Agent lookup returned malformed JSON; check AVP API response handling before proceeding.",
+                            api_reachable=True,
+                            status_code=agent_lookup.status_code,
+                            detail=agent_lookup.text[:200],
+                        )
+                    registered = True
+                    verified = bool(data.get("is_verified"))
+                    agent_status = data.get("status")
+                    if isinstance(agent_status, str) and agent_status.upper() in {"SUSPENDED", "REVOKED"}:
+                        return report(
+                            False,
+                            "agent_suspended",
+                            "This agent DID is suspended or revoked; create or use a different verified DID.",
+                            api_reachable=True,
+                            registered=True,
+                            verified=verified,
+                            agent_status=agent_status,
+                            status_code=agent_lookup.status_code,
+                        )
+                elif agent_lookup.status_code == 404:
+                    registered = False
+                    verified = False
+                elif agent_lookup.status_code >= 500:
+                    return report(
+                        False,
+                        "backend_or_config_unavailable",
+                        "Check AVP API health and backend configuration before retrying.",
+                        api_reachable=True,
+                        status_code=agent_lookup.status_code,
+                        detail=_response_detail(agent_lookup),
+                    )
+
+                signed_path = "/v1/remediation/cases"
+                signed = c.get(
+                    signed_path,
+                    headers=self._auth_headers("GET", signed_path),
+                )
+        except httpx.RequestError as exc:
+            return report(
+                False,
+                "api_unreachable",
+                "Check base_url, network connectivity, and TLS configuration.",
+                detail=str(exc),
+            )
+
+        if signed.status_code in SUCCESS_STATUS_CODES:
+            if registered is False:
+                return report(
+                    False,
+                    "unregistered",
+                    "Register and verify this DID before the first controlled action.",
+                    api_reachable=True,
+                    registered=False,
+                    verified=False,
+                    signed_request_ok=True,
+                    status_code=signed.status_code,
+                )
+            if verified is False:
+                return report(
+                    False,
+                    "unverified_or_forbidden",
+                    "Verify the agent DID before the first controlled action.",
+                    api_reachable=True,
+                    registered=registered,
+                    verified=False,
+                    agent_status=agent_status,
+                    signed_request_ok=True,
+                    status_code=signed.status_code,
+                )
+            return report(
+                True,
+                "ready",
+                "Ready for controlled_action(...).",
+                api_reachable=True,
+                registered=True if registered is None else registered,
+                verified=True if verified is None else verified,
+                agent_status=agent_status,
+                signed_request_ok=True,
+                status_code=signed.status_code,
+            )
+
+        detail = _response_detail(signed)
+        if signed.status_code == 401:
+            if registered is False:
+                status = "unregistered"
+                next_action = "Register and verify this DID before the first controlled action."
+            else:
+                status = "signature_invalid"
+                next_action = "Check that the local key matches the registered DID, then verify clock skew and signature handling."
+            return report(
+                False,
+                status,
+                next_action,
+                api_reachable=True,
+                registered=registered,
+                verified=verified,
+                agent_status=agent_status,
+                status_code=401,
+                detail=detail,
+            )
+        if signed.status_code == 403:
+            return report(
+                False,
+                "unverified_or_forbidden",
+                "Verify the agent DID and check whether it is suspended, revoked, or not allowed for this read path.",
+                api_reachable=True,
+                registered=registered,
+                verified=verified,
+                agent_status=agent_status,
+                status_code=403,
+                detail=detail,
+            )
+        if signed.status_code == 429:
+            retry_after = _parse_retry_after(signed)
+            return report(
+                False,
+                "rate_limited",
+                f"Wait {retry_after} seconds before retrying; avoid aggressive polling.",
+                api_reachable=True,
+                registered=registered,
+                verified=verified,
+                agent_status=agent_status,
+                status_code=429,
+                detail=detail,
+                retry_after=retry_after,
+            )
+        if signed.status_code >= 500:
+            return report(
+                False,
+                "backend_or_config_unavailable",
+                "AVP backend or proof-signing configuration is unavailable; do not retry aggressively.",
+                api_reachable=True,
+                registered=registered,
+                verified=verified,
+                agent_status=agent_status,
+                status_code=signed.status_code,
+                detail=detail,
+            )
+        return report(
+            False,
+            "unexpected_response",
+            "Inspect status_code and detail before proceeding.",
+            api_reachable=True,
+            registered=registered,
+            verified=verified,
+            agent_status=agent_status,
+            status_code=signed.status_code,
+            detail=detail,
+        )
 
     # === Registration ===
 
