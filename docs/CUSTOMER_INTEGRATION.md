@@ -64,7 +64,7 @@ Preflight checks API reachability, public DID registration status, verification 
 
 ## DelegationReceipt Source
 
-A DelegationReceipt is issued by the principal or workflow owner that authorizes the agent to request a bounded action. It should name the agent DID, the allowed action/resource/environment scope, and the validity window.
+A DelegationReceipt is issued by the principal or workflow owner that authorizes the agent to request a bounded action. DelegationReceipt v1 names the agent DID, allowed category and financial predicates, and validity window. The requested action, resource, and environment are supplied to Runtime Gate and cross-checked there.
 
 Use `can_trust()` before selecting an agent, then issue or obtain a DelegationReceipt for the selected agent before calling `controlled_action(...)`. Reputation helps selection; delegation authorizes the runtime action.
 

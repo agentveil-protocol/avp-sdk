@@ -209,8 +209,8 @@ The pilot is ready for the first customer-controlled action when:
 - DID registration and verification state are acceptable;
 - `integration_preflight()` is ready;
 - signed query requests use AVP-Sig v2;
-- a DelegationReceipt exists for the exact requested scope;
-- the first action is bounded and reviewed;
+- a DelegationReceipt exists for the reviewed category and financial scope;
+- the requested action, resource, and environment are explicitly reviewed before Runtime Gate submission;
 - `executed`, `approval_required`, and `blocked` paths are handled;
 - proof artifact storage is defined before execution.
 
