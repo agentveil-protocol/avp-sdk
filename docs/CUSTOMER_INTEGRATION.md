@@ -99,6 +99,24 @@ elif result.status == "blocked":
 
 `controlled_action()` never auto-approves. If approval is required, the principal must approve the request with their own DID.
 
+To export an explicit proof packet from local artifacts, call
+`build_proof_packet(...)` after `controlled_action(...)`:
+
+```python
+packet = agent.build_proof_packet(
+    delegation_receipt=delegation_receipt,
+    outcome=result,
+    approval_receipt_jcs=approval_receipt_jcs,  # optional
+    remediation_case=remediation_case,          # optional
+)
+
+proof_packet = packet.to_dict()
+```
+
+The helper does not fetch remote resources. It preserves raw signed receipt
+text as `execution_receipt_jcs` and includes parsed receipt fields only as a
+convenience view.
+
 Production applications should also catch SDK exceptions around
 `controlled_action(...)`, especially `AVPRateLimitError`, `AVPValidationError`,
 and `AVPServerError`. The first-action template shows one minimal handling
@@ -175,3 +193,7 @@ Also retain when available:
 - `/v1/audit/verify` result for audit-chain integrity
 
 Signed execution and approval receipts are immutable proof artifacts. Remediation can reference them, but cannot rewrite them.
+
+`examples/first_controlled_action.py` can write the explicit proof packet when
+`AVP_PROOF_PACKET_OUT` is set. The generated packet is a retention helper, not
+a replacement for the raw signed receipt strings.

@@ -128,6 +128,8 @@ The integration must handle all controlled-action outcomes.
 
 - store `receipt_jcs` exactly as returned;
 - store the Runtime Gate `audit_id`;
+- export a proof packet with `agent.build_proof_packet(...)` if the workflow
+  needs one bundled artifact for review;
 - record the action, resource, environment, and SDK version used.
 
 `approval_required`:
@@ -161,6 +163,7 @@ Retain these artifacts for the pilot record:
 - agent DID and public key;
 - Runtime Gate `audit_id`;
 - raw signed execution receipt text (`receipt_jcs`);
+- proof packet generated from explicit local artifacts, if used;
 - signed approval receipt, if approval was required;
 - remediation case IDs and evidence hashes, if contested;
 - SDK version and base URL;

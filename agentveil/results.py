@@ -70,6 +70,63 @@ class ControlledActionOutcome:
 
 
 @dataclass(frozen=True)
+class ProofPacket:
+    """Explicit-input proof bundle for a controlled-action workflow."""
+
+    agent_did: str
+    base_url: str
+    sdk_version: str
+    generated_at: str
+    delegation_receipt: dict[str, Any]
+    outcome_status: ControlledActionStatus
+    audit_id: Optional[str] = None
+    execution_receipt_jcs: Optional[str] = None
+    execution_receipt: Optional[dict[str, Any]] = None
+    approval: Optional[dict[str, Any]] = None
+    approval_receipt_jcs: Optional[str] = None
+    approval_receipt: Optional[dict[str, Any]] = None
+    remediation_case: Optional[dict[str, Any]] = None
+    remediation_refs: Optional[list[dict[str, Any]]] = None
+
+    def __getitem__(self, key: str) -> Any:
+        if not hasattr(self, key):
+            raise KeyError(key)
+        value = getattr(self, key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if not hasattr(self, key):
+            return default
+        value = getattr(self, key)
+        return default if value is None else value
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        for key in (
+            "agent_did",
+            "base_url",
+            "sdk_version",
+            "generated_at",
+            "delegation_receipt",
+            "outcome_status",
+            "audit_id",
+            "execution_receipt_jcs",
+            "execution_receipt",
+            "approval",
+            "approval_receipt_jcs",
+            "approval_receipt",
+            "remediation_case",
+            "remediation_refs",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
+
+
+@dataclass(frozen=True)
 class IntegrationPreflightReport:
     """Safety-preserving readiness check before first integration."""
 
@@ -131,4 +188,5 @@ __all__ = [
     "ControlledActionStatus",
     "IntegrationPreflightReport",
     "IntegrationPreflightStatus",
+    "ProofPacket",
 ]

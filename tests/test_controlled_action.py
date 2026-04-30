@@ -1,11 +1,12 @@
 """Tests for high-level controlled action orchestration."""
 
+import json
 from unittest.mock import patch
 
 from nacl.signing import SigningKey
 
 from agentveil.agent import AVPAgent
-from agentveil.results import ControlledActionOutcome
+from agentveil.results import ControlledActionOutcome, ProofPacket
 
 
 def _make_agent() -> AVPAgent:
@@ -158,3 +159,75 @@ def test_execute_after_approval_executes_with_approval_id():
     assert result.status == "executed"
     assert result.approval_id == "urn:uuid:approval"
     assert result.receipt["status"] == "SUCCESS"
+
+
+def test_build_proof_packet_preserves_raw_receipt_and_uses_no_remote_fetch():
+    agent = _make_agent()
+    delegation_receipt = {
+        "id": "urn:uuid:delegation",
+        "scope": {"action": "infra.resource.inspect"},
+    }
+    receipt_jcs = (
+        '{"receipt_id":"urn:uuid:22222222-2222-2222-2222-222222222222",'
+        '"status":"SUCCESS","nested":{"keep":"exact"}}'
+    )
+    outcome = ControlledActionOutcome(
+        status="executed",
+        decision={"audit_id": "urn:uuid:audit", "decision": "ALLOW"},
+        receipt_jcs=receipt_jcs,
+        receipt=json.loads(receipt_jcs),
+    )
+
+    with patch("agentveil.agent.httpx.Client") as client_mock:
+        packet = agent.build_proof_packet(
+            delegation_receipt=delegation_receipt,
+            outcome=outcome,
+        )
+
+    client_mock.assert_not_called()
+    assert isinstance(packet, ProofPacket)
+    assert packet.agent_did == agent.did
+    assert packet.base_url == "http://localhost:8000"
+    assert packet.sdk_version
+    assert packet.audit_id == "urn:uuid:audit"
+    assert packet.execution_receipt_jcs == receipt_jcs
+    assert packet.execution_receipt["status"] == "SUCCESS"
+
+    delegation_receipt["scope"]["action"] = "changed"
+    assert packet.delegation_receipt["scope"]["action"] == "infra.resource.inspect"
+
+    packet_dict = packet.to_dict()
+    assert packet_dict["execution_receipt_jcs"] == receipt_jcs
+    assert "approval_receipt_jcs" not in packet_dict
+    assert "remediation_case" not in packet_dict
+
+
+def test_build_proof_packet_includes_optional_approval_and_remediation_artifacts():
+    agent = _make_agent()
+    approval_receipt_jcs = '{"approval_id":"urn:uuid:approval","status":"APPROVED"}'
+    remediation_case = {
+        "id": "urn:uuid:case",
+        "evidence": [{"reference_type": "execution_receipt"}],
+    }
+    remediation_refs = [{"case_id": "urn:uuid:case", "evidence_hash": "sha256:abc"}]
+    outcome = ControlledActionOutcome(
+        status="approval_required",
+        decision={"audit_id": "urn:uuid:audit", "decision": "WAITING_FOR_HUMAN_APPROVAL"},
+        approval={"id": "urn:uuid:approval", "status": "PENDING"},
+    )
+
+    packet = agent.build_proof_packet(
+        delegation_receipt={"id": "urn:uuid:delegation"},
+        outcome=outcome,
+        approval_receipt_jcs=approval_receipt_jcs,
+        remediation_case=remediation_case,
+        remediation_refs=remediation_refs,
+    )
+
+    assert packet.outcome_status == "approval_required"
+    assert packet.approval == {"id": "urn:uuid:approval", "status": "PENDING"}
+    assert packet.approval_receipt_jcs == approval_receipt_jcs
+    assert packet.approval_receipt["status"] == "APPROVED"
+    assert packet.remediation_case["id"] == "urn:uuid:case"
+    assert packet.remediation_refs == remediation_refs
+    assert "execution_receipt_jcs" not in packet.to_dict()

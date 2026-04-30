@@ -15,6 +15,9 @@ Usage:
 import json
 import os
 import logging
+from copy import deepcopy
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 import httpx
@@ -22,7 +25,7 @@ from nacl.signing import SigningKey, VerifyKey
 
 from agentveil.auth import build_auth_header
 from agentveil.pow import solve_pow
-from agentveil.results import ControlledActionOutcome, IntegrationPreflightReport
+from agentveil.results import ControlledActionOutcome, IntegrationPreflightReport, ProofPacket
 from agentveil.exceptions import (
     AVPError,
     AVPAuthError,
@@ -1514,6 +1517,51 @@ class AVPAgent:
             approval_id=approval_id,
             receipt_jcs=receipt_jcs,
             receipt=json.loads(receipt_jcs),
+        )
+
+    def build_proof_packet(
+        self,
+        delegation_receipt: dict,
+        outcome: ControlledActionOutcome,
+        approval_receipt_jcs: Optional[str] = None,
+        remediation_case: Optional[dict] = None,
+        remediation_refs: Optional[list[dict]] = None,
+    ) -> ProofPacket:
+        """
+        Build a proof packet from explicit local artifacts only.
+
+        This helper does not fetch remote resources or modify signed receipt
+        text. Store `execution_receipt_jcs` and `approval_receipt_jcs` exactly
+        as returned by AVP.
+        """
+        audit_id = outcome.audit_id
+        if audit_id is None and outcome.decision is not None:
+            audit_id = outcome.decision.get("audit_id")
+
+        approval_receipt = None
+        if approval_receipt_jcs is not None:
+            approval_receipt = json.loads(approval_receipt_jcs)
+
+        try:
+            sdk_version = version("agentveil")
+        except PackageNotFoundError:
+            sdk_version = "0.7.2"
+
+        return ProofPacket(
+            agent_did=self._did,
+            base_url=self._base_url,
+            sdk_version=sdk_version,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            delegation_receipt=deepcopy(delegation_receipt),
+            outcome_status=outcome.status,
+            audit_id=audit_id,
+            execution_receipt_jcs=outcome.receipt_jcs,
+            execution_receipt=deepcopy(outcome.receipt),
+            approval=deepcopy(outcome.approval),
+            approval_receipt_jcs=approval_receipt_jcs,
+            approval_receipt=approval_receipt,
+            remediation_case=deepcopy(remediation_case),
+            remediation_refs=deepcopy(remediation_refs),
         )
 
     def get_reputation_velocity(self, did: Optional[str] = None) -> dict:

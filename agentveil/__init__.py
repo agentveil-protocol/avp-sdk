@@ -14,7 +14,7 @@ Usage:
 
 from agentveil.agent import AVPAgent
 from agentveil.mock import AVPMockAgent
-from agentveil.results import ControlledActionOutcome, IntegrationPreflightReport
+from agentveil.results import ControlledActionOutcome, IntegrationPreflightReport, ProofPacket
 from agentveil.tracked import avp_tracked, clear_agent_cache
 from agentveil.exceptions import (
     AVPError,
@@ -32,6 +32,7 @@ __all__ = [
     "AVPMockAgent",
     "ControlledActionOutcome",
     "IntegrationPreflightReport",
+    "ProofPacket",
     "avp_tracked",
     "clear_agent_cache",
     "AVPError",

@@ -16,6 +16,9 @@ or:
 
 Do not put private keys, cloud tokens, or raw private logs in the delegation
 receipt or action params.
+
+Set AVP_PROOF_PACKET_OUT=/path/to/proof_packet.json to retain the explicit
+pilot proof packet after controlled_action().
 """
 
 from __future__ import annotations
@@ -89,6 +92,23 @@ def handle_outcome(result: ControlledActionOutcome) -> None:
     print(f"reason={result.reason}")
 
 
+def write_proof_packet(
+    agent: AVPAgent,
+    result: ControlledActionOutcome,
+    delegation_receipt: dict[str, Any],
+) -> None:
+    proof_packet_path = os.getenv("AVP_PROOF_PACKET_OUT")
+    if not proof_packet_path:
+        return
+
+    packet = agent.build_proof_packet(
+        delegation_receipt=delegation_receipt,
+        outcome=result,
+    )
+    Path(proof_packet_path).write_text(json.dumps(packet.to_dict(), indent=2, sort_keys=True))
+    print(f"proof_packet_written={proof_packet_path}")
+
+
 def print_sdk_error(exc: AVPError) -> None:
     if isinstance(exc, AVPRateLimitError):
         print("error=rate_limited")
@@ -144,6 +164,7 @@ def main() -> int:
         return 1
 
     handle_outcome(result)
+    write_proof_packet(agent, result, delegation_receipt)
     return 0
 
 
