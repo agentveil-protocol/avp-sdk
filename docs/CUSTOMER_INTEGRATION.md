@@ -202,6 +202,23 @@ Use these when your application wants to own orchestration:
 
 Runtime `BLOCK` is not an HTTP error. It is a safety decision returned by Runtime Gate or Governance.
 
+`integration_preflight()` normalizes setup/auth readiness states:
+
+| Status | Meaning | Next action |
+|---|---|---|
+| `ready` | API, registration, verification, and safe signed read are ready. | Attempt the controlled action through Runtime Gate. |
+| `unregistered` | DID is local-only or unknown to AVP. | Register and verify the DID. |
+| `unverified_or_forbidden` | DID exists but is not verified or cannot use the signed read path. | Complete verification or inspect permissions. |
+| `agent_suspended` | DID is suspended. | Stop using it until restored by an authorized operator. |
+| `agent_revoked` | DID is revoked. | Stop using it permanently. |
+| `agent_migrated` | DID has moved to a successor DID. | Switch to `successor_did` when available. |
+| `signature_invalid` | Signature failed or timestamp expired. | Check local key, clock skew, and signing path. |
+| `nonce_replay` | Signed headers or nonce were reused. | Retry with a fresh request. |
+
+`ready` means setup/auth is ready to attempt `controlled_action(...)`. It does
+not guarantee Runtime Gate, Governance, Human Approval, or execution will allow
+the requested action.
+
 ## Proof Retention Checklist
 
 For a security/compliance review, retain:

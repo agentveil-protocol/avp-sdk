@@ -15,6 +15,9 @@ IntegrationPreflightStatus = Literal[
     "signature_invalid",
     "unverified_or_forbidden",
     "agent_suspended",
+    "agent_revoked",
+    "agent_migrated",
+    "nonce_replay",
     "rate_limited",
     "backend_or_config_unavailable",
     "unexpected_response",
@@ -140,6 +143,7 @@ class IntegrationPreflightReport:
     registered: Optional[bool] = None
     verified: Optional[bool] = None
     agent_status: Optional[str] = None
+    successor_did: Optional[str] = None
     signed_request_ok: bool = False
     status_code: Optional[int] = None
     detail: Optional[str] = None
@@ -172,6 +176,7 @@ class IntegrationPreflightReport:
             "registered",
             "verified",
             "agent_status",
+            "successor_did",
             "signed_request_ok",
             "status_code",
             "detail",

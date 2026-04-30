@@ -139,7 +139,85 @@ def test_integration_preflight_suspended_agent_gets_specific_status():
     assert report.registered is True
     assert report.verified is True
     assert report.agent_status == "SUSPENDED"
-    assert "suspended or revoked" in report.next_action
+    assert "suspended" in report.next_action
+
+
+def test_integration_preflight_revoked_agent_gets_specific_status():
+    agent = _make_agent()
+
+    def mock_get(url, **kwargs):
+        if url == "/v1/health":
+            return _response(200, {"status": "ok", "database": "ok"})
+        if url == f"/v1/agents/{agent.did}":
+            return _response(200, {"did": agent.did, "is_verified": True, "status": "REVOKED"})
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch.object(httpx.Client, "get", side_effect=mock_get):
+        report = agent.integration_preflight()
+
+    assert report.ready is False
+    assert report.status == "agent_revoked"
+    assert report.registered is True
+    assert report.verified is True
+    assert report.agent_status == "REVOKED"
+    assert "revoked" in report.next_action
+
+
+def test_integration_preflight_migrated_agent_gets_specific_status_from_lookup():
+    agent = _make_agent()
+
+    def mock_get(url, **kwargs):
+        if url == "/v1/health":
+            return _response(200, {"status": "ok", "database": "ok"})
+        if url == f"/v1/agents/{agent.did}":
+            return _response(200, {
+                "did": agent.did,
+                "is_verified": True,
+                "status": "succeeded",
+                "successor_did": "did:key:z6MkSuccessor",
+            })
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch.object(httpx.Client, "get", side_effect=mock_get):
+        report = agent.integration_preflight()
+
+    assert report.ready is False
+    assert report.status == "agent_migrated"
+    assert report.registered is True
+    assert report.verified is True
+    assert report.agent_status == "succeeded"
+    assert report.successor_did == "did:key:z6MkSuccessor"
+    assert "successor DID" in report.next_action
+
+
+def test_integration_preflight_migrated_lookup_falls_through_for_successor_from_signed_read():
+    agent = _make_agent()
+
+    def mock_get(url, **kwargs):
+        if url == "/v1/health":
+            return _response(200, {"status": "ok", "database": "ok"})
+        if url == f"/v1/agents/{agent.did}":
+            return _response(200, {
+                "did": agent.did,
+                "is_verified": True,
+                "status": "succeeded",
+            })
+        if url == "/v1/remediation/cases":
+            return _response(403, {
+                "detail": "Agent has been migrated to a new DID — use successor_did",
+                "successor_did": "did:key:z6MkSuccessor",
+            })
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch.object(httpx.Client, "get", side_effect=mock_get):
+        report = agent.integration_preflight()
+
+    assert report.ready is False
+    assert report.status == "agent_migrated"
+    assert report.registered is True
+    assert report.verified is True
+    assert report.agent_status == "succeeded"
+    assert report.successor_did == "did:key:z6MkSuccessor"
 
 
 def test_integration_preflight_maps_403_as_unverified_or_forbidden():
@@ -163,6 +241,53 @@ def test_integration_preflight_maps_403_as_unverified_or_forbidden():
     assert report.verified is False
     assert report.status_code == 403
     assert "Verify the agent DID" in report.next_action
+
+
+def test_integration_preflight_maps_nonce_replay_from_signed_read():
+    agent = _make_agent()
+
+    def mock_get(url, **kwargs):
+        if url == "/v1/health":
+            return _response(200, {"status": "ok", "database": "ok"})
+        if url == f"/v1/agents/{agent.did}":
+            return _response(200, {"did": agent.did, "is_verified": True, "status": "active"})
+        if url == "/v1/remediation/cases":
+            return _response(401, {"detail": "Nonce already used"})
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch.object(httpx.Client, "get", side_effect=mock_get):
+        report = agent.integration_preflight()
+
+    assert report.ready is False
+    assert report.status == "nonce_replay"
+    assert report.registered is True
+    assert report.verified is True
+    assert report.status_code == 401
+    assert "fresh request" in report.next_action
+
+
+def test_integration_preflight_maps_migrated_signed_read_and_preserves_successor():
+    agent = _make_agent()
+
+    def mock_get(url, **kwargs):
+        if url == "/v1/health":
+            return _response(200, {"status": "ok", "database": "ok"})
+        if url == f"/v1/agents/{agent.did}":
+            return _response(200, {"did": agent.did, "is_verified": True, "status": "active"})
+        if url == "/v1/remediation/cases":
+            return _response(403, {
+                "detail": "Agent has been migrated to a new DID — use successor_did",
+                "successor_did": "did:key:z6MkSuccessor",
+            })
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch.object(httpx.Client, "get", side_effect=mock_get):
+        report = agent.integration_preflight()
+
+    assert report.ready is False
+    assert report.status == "agent_migrated"
+    assert report.successor_did == "did:key:z6MkSuccessor"
+    assert report.status_code == 403
 
 
 def test_integration_preflight_malformed_agent_lookup_json_does_not_raise():

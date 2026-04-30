@@ -66,6 +66,19 @@ If preflight fails:
 - respect `report.retry_after` when present;
 - do not call `controlled_action(...)` yet.
 
+Setup/auth readiness states:
+
+| Status | Pilot meaning |
+|---|---|
+| `ready` | Setup/auth is ready to attempt `controlled_action(...)`. |
+| `unregistered` | DID is local-only or unknown to AVP. |
+| `unverified_or_forbidden` | DID exists but is not verified or cannot use the signed read path. |
+| `agent_suspended` | DID is suspended. |
+| `agent_revoked` | DID is revoked. |
+| `agent_migrated` | DID has moved to a successor DID. |
+| `signature_invalid` | Signature failed or timestamp expired. |
+| `nonce_replay` | Signed headers or nonce were reused. |
+
 This preflight does not execute actions, create approvals, or prove that the
 customer's DelegationReceipt is valid for a specific action.
 

@@ -410,6 +410,7 @@ class AVPAgent:
             registered: Optional[bool] = None,
             verified: Optional[bool] = None,
             agent_status: Optional[str] = None,
+            successor_did: Optional[str] = None,
             signed_request_ok: bool = False,
             status_code: Optional[int] = None,
             detail: Optional[str] = None,
@@ -425,6 +426,7 @@ class AVPAgent:
                 registered=registered,
                 verified=verified,
                 agent_status=agent_status,
+                successor_did=successor_did,
                 signed_request_ok=signed_request_ok,
                 status_code=status_code,
                 detail=detail,
@@ -434,6 +436,7 @@ class AVPAgent:
         registered: Optional[bool] = None
         verified: Optional[bool] = None
         agent_status: Optional[str] = None
+        successor_did: Optional[str] = None
 
         try:
             with httpx.Client(base_url=self._base_url, timeout=self._timeout) as c:
@@ -486,17 +489,49 @@ class AVPAgent:
                     registered = True
                     verified = bool(data.get("is_verified"))
                     agent_status = data.get("status")
-                    if isinstance(agent_status, str) and agent_status.upper() in {"SUSPENDED", "REVOKED"}:
+                    successor_raw = data.get("successor_did")
+                    if isinstance(successor_raw, str) and successor_raw:
+                        successor_did = successor_raw
+                    normalized_status = (
+                        agent_status.lower()
+                        if isinstance(agent_status, str)
+                        else ""
+                    )
+                    if normalized_status == "suspended":
                         return report(
                             False,
                             "agent_suspended",
-                            "This agent DID is suspended or revoked; create or use a different verified DID.",
+                            "This agent DID is suspended; stop using it until it is restored by an authorized operator.",
                             api_reachable=True,
                             registered=True,
                             verified=verified,
                             agent_status=agent_status,
                             status_code=agent_lookup.status_code,
                         )
+                    if normalized_status == "revoked":
+                        return report(
+                            False,
+                            "agent_revoked",
+                            "This agent DID is revoked; stop using it permanently and use a different verified DID.",
+                            api_reachable=True,
+                            registered=True,
+                            verified=verified,
+                            agent_status=agent_status,
+                            status_code=agent_lookup.status_code,
+                        )
+                    if normalized_status == "succeeded":
+                        if successor_did is not None:
+                            return report(
+                                False,
+                                "agent_migrated",
+                                "This agent DID has migrated; use the successor DID for future signed requests.",
+                                api_reachable=True,
+                                registered=True,
+                                verified=verified,
+                                agent_status=agent_status,
+                                successor_did=successor_did,
+                                status_code=agent_lookup.status_code,
+                            )
                 elif agent_lookup.status_code == 404:
                     registered = False
                     verified = False
@@ -564,6 +599,9 @@ class AVPAgent:
             if registered is False:
                 status = "unregistered"
                 next_action = "Register and verify this DID before the first controlled action."
+            elif "Nonce already used" in detail:
+                status = "nonce_replay"
+                next_action = "Retry with a fresh request; do not reuse signed headers or nonces."
             else:
                 status = "signature_invalid"
                 next_action = "Check that the local key matches the registered DID, then verify clock skew and signature handling."
@@ -575,18 +613,40 @@ class AVPAgent:
                 registered=registered,
                 verified=verified,
                 agent_status=agent_status,
+                successor_did=successor_did,
                 status_code=401,
                 detail=detail,
             )
         if signed.status_code == 403:
+            status = "unverified_or_forbidden"
+            next_action = "Verify the agent DID and check whether it is allowed for this read path."
+            if "Agent suspended" in detail:
+                status = "agent_suspended"
+                next_action = "This agent DID is suspended; stop using it until it is restored by an authorized operator."
+            elif "Agent revoked" in detail:
+                status = "agent_revoked"
+                next_action = "This agent DID is revoked; stop using it permanently and use a different verified DID."
+            elif "migrated" in detail or "successor_did" in detail:
+                status = "agent_migrated"
+                next_action = "This agent DID has migrated; use the successor DID for future signed requests."
+                try:
+                    body = signed.json()
+                except Exception:
+                    body = {}
+                found_successor = body.get("successor_did") if isinstance(body, dict) else None
+                if isinstance(found_successor, str) and found_successor:
+                    successor_did = found_successor
+            elif "Agent not verified" in detail:
+                next_action = "Verify the agent DID before the first controlled action."
             return report(
                 False,
-                "unverified_or_forbidden",
-                "Verify the agent DID and check whether it is suspended, revoked, or not allowed for this read path.",
+                status,
+                next_action,
                 api_reachable=True,
                 registered=registered,
                 verified=verified,
                 agent_status=agent_status,
+                successor_did=successor_did,
                 status_code=403,
                 detail=detail,
             )
@@ -600,6 +660,7 @@ class AVPAgent:
                 registered=registered,
                 verified=verified,
                 agent_status=agent_status,
+                successor_did=successor_did,
                 status_code=429,
                 detail=detail,
                 retry_after=retry_after,
@@ -613,6 +674,7 @@ class AVPAgent:
                 registered=registered,
                 verified=verified,
                 agent_status=agent_status,
+                successor_did=successor_did,
                 status_code=signed.status_code,
                 detail=detail,
             )
@@ -624,6 +686,7 @@ class AVPAgent:
             registered=registered,
             verified=verified,
             agent_status=agent_status,
+            successor_did=successor_did,
             status_code=signed.status_code,
             detail=detail,
         )
