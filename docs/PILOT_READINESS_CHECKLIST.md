@@ -33,7 +33,7 @@ Out of scope for this pilot checklist:
 - Install the pinned SDK:
 
   ```bash
-  python -m pip install agentveil==0.7.3
+  python -m pip install agentveil==0.7.4
   ```
 
 - Create or load the local agent identity.
@@ -86,7 +86,7 @@ customer's DelegationReceipt is valid for a specific action.
 
 Confirm the customer environment is using the current signed-query path.
 
-- SDK must be `agentveil==0.7.3` or a later release containing the documented
+- SDK must be `agentveil==0.7.4` or a later release containing the documented
   helper/status behavior.
 - Signed requests with query parameters must use AVP-Sig v2.
 - AVP-Sig v1 remains valid only for signed requests without query parameters.
@@ -204,9 +204,6 @@ artifact and use parsed receipt fields only as a convenience view.
 
 ## Verify Proof Artifacts Offline
 
-The verifier APIs in this section describe unreleased main-branch SDK behavior
-until the next SDK release includes them.
-
 For external review, keep signature verification separate from AVP semantic
 verification:
 
@@ -242,7 +239,7 @@ Current signed receipt schemas:
 
 The pilot is ready for the first customer-controlled action when:
 
-- SDK install is pinned to `agentveil==0.7.3` or a later release containing
+- SDK install is pinned to `agentveil==0.7.4` or a later release containing
   the documented helper/status behavior;
 - local identity is created or loaded securely;
 - DID registration and verification state are acceptable;

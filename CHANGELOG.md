@@ -2,6 +2,23 @@
 
 All notable changes to the `agentveil` SDK.
 
+## [0.7.4] — 2026-04-30
+
+### Added
+- `verify_signed_jcs(...)` for offline DataIntegrityProof /
+  `eddsa-jcs-2022` signature verification of signed JCS proof artifacts.
+- `verify_proof_packet(...)` for AVP-level semantic verification of
+  DelegationReceipt, DecisionReceipt, HumanApprovalReceipt, and
+  ExecutionReceipt proof chains.
+- Role-specific trusted signer DID configuration for DecisionReceipt,
+  ExecutionReceipt, and HumanApprovalReceipt verification.
+- Optional `decision_receipt_jcs` support in `ProofPacket` and
+  `AVPAgent.build_proof_packet(...)`.
+
+### Changed
+- Customer integration docs now include an offline proof verification recipe,
+  receipt schema/version matrix, and trust-anchor guidance.
+
 ## [0.7.3] — 2026-04-30
 
 ### Added

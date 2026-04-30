@@ -245,9 +245,6 @@ a replacement for the raw signed receipt strings.
 
 ## Offline Proof Verification
 
-The verifier APIs in this section describe unreleased main-branch SDK behavior
-until the next SDK release includes them.
-
 Signature verification and AVP semantic verification are separate.
 
 `verify_signed_jcs(...)` proves that one JCS receipt was signed by the DID in

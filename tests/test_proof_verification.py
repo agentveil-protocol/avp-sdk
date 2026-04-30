@@ -138,7 +138,7 @@ def _packet(*, with_approval: bool = False) -> dict:
     return {
         "agent_did": AGENT_DID,
         "base_url": "https://agentveil.dev",
-        "sdk_version": "0.7.3",
+        "sdk_version": "0.7.4",
         "generated_at": "2026-04-30T00:00:00Z",
         "delegation_receipt": delegation,
         "outcome_status": "executed",
