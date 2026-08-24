@@ -4,7 +4,22 @@ All notable changes to the `agentveil` SDK.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Documentation
+- Clarified the public version source of truth across README, changelog, and
+  roadmap surfaces.
+
+## [0.7.44-mcp-proxy] - 2026-08-10
+
+Current public MCP Proxy package marker.
+
+### MCP Proxy package
+- Current package metadata and PyPI release: `agentveil-mcp-proxy 0.7.44`.
+- The proxy package depends on `agentveil>=0.7.23,<0.8`, matching the current
+  public SDK package line.
+- This entry restores visible changelog continuity after public notes previously
+  stopped at `0.7.35-mcp-proxy`. Detailed per-version notes for the 0.7.36
+  through 0.7.44 patch series were not maintained in this file before this
+  catch-up entry.
 
 ## [0.7.35-mcp-proxy] - 2026-07-23
 
