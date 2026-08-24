@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 from agentveil_mcp_proxy import cursor_hooks
+from agentveil_mcp_proxy.cursor_hooks import classify_cursor_tool
+from agentveil_mcp_proxy.policy import RiskClass
+from test_mcp_proxy_classification import NATIVE_SHELL_COMMAND_MATRIX
 from agentveil_mcp_proxy.client_guidance import (
     parse_redirect_context_from_cursor_hook_output,
 )
@@ -353,3 +356,15 @@ def test_cursor_hook_denied_uploads_bounded_decision_summary(monkeypatch, tmp_pa
     encoded = json.dumps(payload_to_request_body(uploads[0]))
     assert "secret" not in encoded
     assert "foo.txt" not in encoded
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
+def test_cursor_shell_classifier_matches_shared_matrix(command: str, expected: RiskClass) -> None:
+    assert (
+        classify_cursor_tool(
+            "",
+            hook_event="beforeShellExecution",
+            command=command,
+        )
+        is expected
+    )

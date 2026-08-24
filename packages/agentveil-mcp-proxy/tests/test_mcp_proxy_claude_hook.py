@@ -16,7 +16,9 @@ import pytest
 
 from agentveil_mcp_proxy import claude_hook
 from agentveil_mcp_proxy.claude_hook import (
+    AGENTVEIL_CONTROLLED_MCP_SERVER,
     CLAUDE_SERVER_LABEL,
+    NATIVE_REDIRECT_INSTRUCTION,
     _bounded_input_ref,
     build_evidence_record,
     build_tool_call_context,
@@ -27,11 +29,18 @@ from agentveil_mcp_proxy.claude_hook import (
     main,
     process_hook,
 )
+from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_claude_hook_output
 from agentveil_mcp_proxy.policy import (
     PolicyDecision,
     PolicyEngine,
     RiskClass,
 )
+from redirect_hook_contract_fixtures import (
+    durable_original_metadata,
+    init_redirect_contract_home,
+    publish_live_hook_binding,
+)
+from test_mcp_proxy_classification import NATIVE_SHELL_COMMAND_MATRIX
 
 
 @pytest.fixture(autouse=True)
@@ -660,9 +669,6 @@ def test_format_hook_output_deny_returns_claude_compatible_json() -> None:
 # ----- S2 corrective: native deny carries an agent-facing redirect ----------
 
 
-from agentveil_mcp_proxy.claude_hook import NATIVE_REDIRECT_INSTRUCTION
-
-
 @pytest.mark.parametrize(
     "tool_name,tool_input,expect_write_file_redirect",
     [
@@ -802,9 +808,6 @@ def test_claude_hook_denies_broad_git_add_end_to_end() -> None:
 
 
 # ----- S3 corrective: controlled AgentVeil MCP route must pass through -------
-
-
-from agentveil_mcp_proxy.claude_hook import AGENTVEIL_CONTROLLED_MCP_SERVER
 
 
 @pytest.mark.parametrize(
@@ -969,14 +972,6 @@ def test_ask_backend_is_fail_closed_in_s1() -> None:
 # ----- Verified redirect connector contract -----------------------------------
 
 
-from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_claude_hook_output
-from redirect_hook_contract_fixtures import (
-    durable_original_metadata,
-    init_redirect_contract_home,
-    publish_live_hook_binding,
-)
-
-
 def test_claude_native_write_registers_durable_origin_and_agent_surface_context(tmp_path: Path) -> None:
     home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
     fixture = publish_live_hook_binding(home, downstream=downstream)
@@ -1062,3 +1057,8 @@ def test_claude_hook_denied_uploads_bounded_decision_summary(monkeypatch):
     encoded = json.dumps(payload_to_request_body(uploads[0]))
     assert "SECRET" not in encoded
     assert "/tmp/secret.txt" not in encoded
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
+def test_claude_shell_classifier_matches_shared_matrix(command: str, expected: RiskClass) -> None:
+    assert classify_claude_tool("Bash", {"command": command}) is expected

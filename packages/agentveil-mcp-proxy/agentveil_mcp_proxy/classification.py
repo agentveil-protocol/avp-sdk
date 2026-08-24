@@ -708,6 +708,31 @@ _GIT_REMOTE_OR_RELEASE_SUBCOMMANDS: frozenset[str] = frozenset({
     "deploy",
 })
 
+_GIT_BOUNDED_REMOTE_ALIASES: frozenset[str] = frozenset({
+    "origin",
+    "upstream",
+})
+
+_GIT_LS_REMOTE_SAFE_FLAGS: frozenset[str] = frozenset({
+    "--heads",
+    "--tags",
+    "--refs",
+    "--symref",
+    "--get-url",
+    "--exit-code",
+    "--quiet",
+    "-q",
+})
+
+_GIT_LS_REMOTE_FORBIDDEN_FLAG_PREFIXES: tuple[str, ...] = (
+    "--upload-pack",
+    "--exec",
+)
+
+_GIT_LS_REMOTE_REF_RE = re.compile(
+    r"^(HEAD|[A-Za-z0-9][A-Za-z0-9._/-]*|refs/[A-Za-z0-9][A-Za-z0-9._/-]*)$",
+)
+
 _SHELL_COMPOSITION_PATTERNS: tuple[str, ...] = (
     "$(",   # command substitution
     "`",    # backtick command substitution
@@ -1038,7 +1063,7 @@ def _classify_agentveil_cli_command(tokens: list[str]) -> RiskClass | None:
 
     if not tokens or tokens[0] != "agentveil-mcp-proxy":
         return None
-    if tokens[1:] == ["--version"]:
+    if len(tokens) == 2 and tokens[1] in {"--version", "--help", "-h"}:
         return RiskClass.READ
     if len(tokens) >= 3 and tokens[1:3] == ["setup", "status"]:
         return RiskClass.READ
@@ -1199,6 +1224,56 @@ def _git_checkout_is_unsafe(raw_tokens: list[str]) -> bool:
     return False
 
 
+def _git_remote_alias_is_bounded(token: str) -> bool:
+    """Return True only for trusted local remote aliases."""
+
+    return token in _GIT_BOUNDED_REMOTE_ALIASES
+
+
+def _git_ls_remote_ref_is_bounded(token: str) -> bool:
+    """Return True for bounded ref names accepted after a remote alias."""
+
+    if "://" in token or "@" in token or ":" in token or "\\" in token:
+        return False
+    if token.startswith(("/", ".", "~")):
+        return False
+    return _GIT_LS_REMOTE_REF_RE.fullmatch(token) is not None
+
+
+def _git_ls_remote_flag_is_forbidden(arg: str) -> bool:
+    lowered = arg.lower()
+    if lowered in _GIT_LS_REMOTE_FORBIDDEN_FLAG_PREFIXES:
+        return True
+    return any(
+        lowered.startswith(f"{prefix}=") for prefix in _GIT_LS_REMOTE_FORBIDDEN_FLAG_PREFIXES
+    )
+
+
+def _classify_git_ls_remote(raw_tokens: list[str]) -> RiskClass:
+    """Classify bounded read-only ``git ls-remote`` diagnostics only."""
+
+    args = raw_tokens[2:]
+    if not args:
+        return RiskClass.UNKNOWN
+
+    positional: list[str] = []
+    for arg in args:
+        if _git_ls_remote_flag_is_forbidden(arg):
+            return RiskClass.UNKNOWN
+        if arg.startswith("-"):
+            if arg not in _GIT_LS_REMOTE_SAFE_FLAGS:
+                return RiskClass.UNKNOWN
+            continue
+        positional.append(arg)
+
+    if not positional or not _git_remote_alias_is_bounded(positional[0]):
+        return RiskClass.UNKNOWN
+    for ref in positional[1:]:
+        if not _git_ls_remote_ref_is_bounded(ref):
+            return RiskClass.UNKNOWN
+    return RiskClass.READ
+
+
 def _classify_git_command(raw_tokens: list[str]) -> RiskClass:
     """Classify a tokenized ``git ...`` command (case preserved for short flags)."""
 
@@ -1228,6 +1303,9 @@ def _classify_git_command(raw_tokens: list[str]) -> RiskClass:
         if any(flag in lower_args for flag in ("--hard", "--force", "-f", "--onto")):
             return RiskClass.DESTRUCTIVE
         return RiskClass.UNKNOWN
+
+    if subcommand == "ls-remote":
+        return _classify_git_ls_remote(raw_tokens)
 
     if subcommand == "add":
         if _git_add_is_broad(raw_tokens):
@@ -1275,6 +1353,14 @@ def _classify_simple_native_shell_tokens(raw_tokens: list[str]) -> RiskClass:
         return RiskClass.DESTRUCTIVE
 
     tokens = _strip_leading_env_assignments(raw_tokens)
+    if (
+        len(tokens) < len(raw_tokens)
+        and len(tokens) >= 2
+        and tokens[0].lower() == "git"
+        and tokens[1].lower() == "ls-remote"
+    ):
+        return RiskClass.UNKNOWN
+
     lower_tokens = [token.lower() for token in tokens]
     if not tokens:
         return RiskClass.UNKNOWN
