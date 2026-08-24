@@ -36,9 +36,11 @@ from agentveil_mcp_proxy.client_guidance import (
     format_native_redirect_agent_surface,
     maybe_register_native_redirect_for_hook_deny,
     native_hook_deny_instruction,
-    native_write_redirect_supported,
 )
-from agentveil_mcp_proxy.hook_policy import HookDisposition, resolve_hook_disposition
+from agentveil_mcp_proxy.hook_policy import (
+    HookDisposition,
+    resolve_native_hook_disposition_on_deny,
+)
 from agentveil_mcp_proxy.policy import (
     PolicyConfig,
     PolicyDecision,
@@ -48,12 +50,28 @@ from agentveil_mcp_proxy.policy import (
     RiskClass,
     ToolCallContext,
 )
+from agentveil_mcp_proxy.product_route import PRODUCT_ROUTE_DOWNSTREAM_NAME
 
 NATIVE_REDIRECT_INSTRUCTION = NATIVE_FILE_WRITE_REDIRECT_INSTRUCTION
 
 CURSOR_SERVER_LABEL = "cursor"
 AGENTVEIL_CONTROLLED_MCP_SERVER = "agentveil-mcp-proxy"
 AGENTVEIL_MCP_SERVER_KEY = AGENTVEIL_CONTROLLED_MCP_SERVER
+
+_CURSOR_TRUSTED_MCP_ENV_KEYS = frozenset({
+    "DOWNSTREAM_NAME",
+    "AVP_HOME",
+    "MCP_CONTENT_ROOT",
+    "AVP_CURSOR_WORKSPACE",
+    "PRODUCT_ROUTE_PROFILE_ROOT",
+})
+
+_CURSOR_MANAGED_ENTRY_KEYS = frozenset({"type", "command", "args", "env"})
+
+_CURSOR_TRUSTED_PROXY_BASENAMES = frozenset({
+    "agentveil-mcp-proxy",
+    "agentveil-mcp-proxy.exe",
+})
 
 _MCP_READ_TOOLS = frozenset({
     "list_workspace",
@@ -86,6 +104,19 @@ def normalize_mcp_tool_name(tool_name: str) -> str:
         _prefix, tool = name.split(":", 1)
         return tool.strip()
     return name
+
+
+def _mcp_server_label_from_tool_name(tool_name: str) -> str:
+    """Return the MCP server label embedded in a Cursor tool name, if present."""
+
+    name = tool_name.strip()
+    if name.upper().startswith("MCP:"):
+        return AGENTVEIL_CONTROLLED_MCP_SERVER
+    if ":" in name:
+        prefix = name.split(":", 1)[0].strip()
+        if prefix:
+            return prefix
+    return AGENTVEIL_CONTROLLED_MCP_SERVER
 
 
 def normalize_hook_payload(
@@ -160,7 +191,7 @@ def build_tool_call_context(payload: Mapping[str, Any]) -> ToolCallContext:
     )
     if hook_event == "beforeMCPExecution" or is_mcp_tool_name(tool_name):
         tool_suffix = normalize_mcp_tool_name(tool_name)
-        server = AGENTVEIL_CONTROLLED_MCP_SERVER
+        server = _mcp_server_label_from_tool_name(tool_name)
         action_family = infer_action_family(tool_suffix)
     else:
         server = CURSOR_SERVER_LABEL
@@ -254,12 +285,91 @@ def _load_workspace_mcp_servers(workspace: Path) -> dict[str, Any]:
     return servers if isinstance(servers, dict) else {}
 
 
+def _cursor_resolved_path_string(path: str | Path) -> str:
+    return str(Path(path).expanduser().resolve())
+
+
+def _cursor_expected_home_paths(home: Path) -> tuple[Path, Path, Path]:
+    resolved_home = Path(home).expanduser().resolve()
+    return (
+        resolved_home / "mcp-proxy" / "config.json",
+        resolved_home / "passphrase",
+        resolved_home / "product-profile",
+    )
+
+
+def _cursor_canonical_managed_args(avp_home: Path) -> list[str]:
+    expected_config, expected_passphrase, _ = _cursor_expected_home_paths(avp_home)
+    return [
+        "run",
+        "--home", str(avp_home),
+        "--config", str(expected_config),
+        "--passphrase-file", str(expected_passphrase),
+    ]
+
+
+def _cursor_canonical_managed_env(avp_home: Path, workspace: Path) -> dict[str, str]:
+    resolved_workspace = _cursor_resolved_path_string(workspace)
+    _, _, expected_profile = _cursor_expected_home_paths(avp_home)
+    return {
+        "DOWNSTREAM_NAME": PRODUCT_ROUTE_DOWNSTREAM_NAME,
+        "AVP_HOME": str(avp_home),
+        "MCP_CONTENT_ROOT": resolved_workspace,
+        "AVP_CURSOR_WORKSPACE": resolved_workspace,
+        "PRODUCT_ROUTE_PROFILE_ROOT": str(expected_profile),
+    }
+
+
+def _cursor_mcp_entry_is_trusted_agentveil_route(entry: Any, workspace: Path) -> bool:
+    """True only for an exact managed route entry bound to *workspace*."""
+
+    if not isinstance(entry, dict):
+        return False
+    if set(entry.keys()) != _CURSOR_MANAGED_ENTRY_KEYS:
+        return False
+    if entry["type"] != "stdio":
+        return False
+    command = str(entry["command"]).strip()
+    if not command:
+        return False
+    command_path = Path(command).expanduser()
+    if not command_path.is_absolute():
+        return False
+    if command_path.name not in _CURSOR_TRUSTED_PROXY_BASENAMES:
+        return False
+    if not command_path.is_file():
+        return False
+    env = entry["env"]
+    if not isinstance(env, dict) or set(env.keys()) != _CURSOR_TRUSTED_MCP_ENV_KEYS:
+        return False
+    avp_home_raw = env.get("AVP_HOME")
+    if not isinstance(avp_home_raw, str) or not avp_home_raw.strip():
+        return False
+    avp_home = Path(avp_home_raw).expanduser().resolve()
+    if env != _cursor_canonical_managed_env(avp_home, workspace):
+        return False
+    args = entry["args"]
+    if not isinstance(args, list):
+        return False
+    return args == _cursor_canonical_managed_args(avp_home)
+
+
+def _trusted_agentveil_mcp_server_keys(
+    servers: Mapping[str, Any],
+    workspace: Path,
+) -> frozenset[str]:
+    trusted: set[str] = set()
+    for key, entry in servers.items():
+        if key != AGENTVEIL_MCP_SERVER_KEY:
+            continue
+        if _cursor_mcp_entry_is_trusted_agentveil_route(entry, workspace):
+            trusted.add(str(key))
+    return frozenset(trusted)
+
+
 def _is_agentveil_mcp_routed(payload: Mapping[str, Any], workspace: Path) -> bool:
     servers = _load_workspace_mcp_servers(workspace)
-    agentveil_keys = {
-        key for key, entry in servers.items()
-        if key == AGENTVEIL_MCP_SERVER_KEY or "agentveil" in json.dumps(entry).lower()
-    }
+    agentveil_keys = _trusted_agentveil_mcp_server_keys(servers, workspace)
     if not agentveil_keys:
         return False
     raw_tool = str(payload.get("tool_name") or payload.get("tool_class") or "")
@@ -282,9 +392,6 @@ def decide(payload: Mapping[str, Any], engine: PolicyEngine, *, workspace: Path)
             return HookDecision("allow", "mcp_read_allow", context, evaluation, HookDisposition.ALLOW)
         if _is_agentveil_mcp_routed(payload, workspace):
             return HookDecision("allow", "controlled_route_passthrough", context, evaluation, HookDisposition.ALLOW)
-
-    if context.server == AGENTVEIL_CONTROLLED_MCP_SERVER:
-        return HookDecision("allow", "controlled_route_passthrough", context, evaluation, HookDisposition.ALLOW)
 
     if evaluation.decision in (PolicyDecision.ALLOW, PolicyDecision.OBSERVE):
         return HookDecision("allow", "allowed", context, evaluation, HookDisposition.ALLOW)
@@ -383,11 +490,9 @@ def process_hook(
         home=home,
     )
     if decision.hook_action == "deny":
-        disposition = resolve_hook_disposition(
+        disposition = resolve_native_hook_disposition_on_deny(
             decision.evaluation,
-            native_write_redirect_supported=native_write_redirect_supported(
-                native_tool=decision.context.tool,
-            ),
+            native_tool=decision.context.tool,
             redirect_route_ready=redirect_origin is not None,
         )
         decision = replace(

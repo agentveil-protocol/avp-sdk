@@ -35,6 +35,18 @@ class InstalledHookCase:
     parse_context: Callable[[dict[str, Any]], dict[str, str] | None]
 
 
+@dataclass(frozen=True)
+class ProcessScenario:
+    scenario_id: str
+    payload: dict[str, Any] | None
+    publish_binding: bool
+    install_cursor_mcp: bool
+    cursor_hook_event: str | None = None
+    expect_allow: bool = False
+    expect_redirect_context: bool = False
+    expect_hard_block_copy: bool = False
+
+
 def _publish_live_binding(home: Path, sandbox: Path) -> object:
     downstream = quickstart_filesystem_downstream(sandbox)
     lease = publish_owner_claim(
@@ -62,10 +74,16 @@ def _init_proxy_home(home: Path, sandbox: Path) -> None:
     init.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
-def _install_cursor_command(project: Path, home: Path) -> str:
+def _install_cursor_command(
+    project: Path,
+    home: Path,
+    *,
+    hook_event: str | None = None,
+) -> str:
     cursor_setup.install_hooks(project, home=home)
     payload = json.loads(cursor_setup.hooks_config_path(project).read_text(encoding="utf-8"))
-    for event in cursor_setup.AGENTVEIL_HOOK_EVENTS:
+    events = (hook_event,) if hook_event else cursor_setup.AGENTVEIL_HOOK_EVENTS
+    for event in events:
         for item in payload.get("hooks", {}).get(event, []) or []:
             if not isinstance(item, dict):
                 continue
@@ -159,6 +177,186 @@ INSTALLED_HOOK_CASES = (
 )
 
 
+SAFE_ALLOW_PAYLOADS = {
+    "cursor": {
+        "hook_event": "preToolUse",
+        "tool_name": "Read",
+        "tool_input": {"path": "note.txt"},
+    },
+    "claude_code": {"tool_name": "Bash", "tool_input": {"command": "git status --short"}},
+    "codex": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git status --short"},
+    },
+    "gemini_cli": {
+        "hook_event_name": "BeforeTool",
+        "tool_name": "run_shell_command",
+        "tool_input": {"command": "git status --short"},
+    },
+}
+
+MCP_PASSTHROUGH_PAYLOADS = {
+    "cursor": {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "agentveil-mcp-proxy:write_file",
+        "arguments": {"path": "note.txt", "content": "hello"},
+    },
+    "claude_code": {
+        "tool_name": "mcp__agentveil-mcp-proxy__list_workspace",
+        "tool_input": {},
+    },
+    "codex": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "mcp__agentveil-mcp-proxy__list_workspace",
+        "tool_input": {},
+    },
+    "gemini_cli": {
+        "hook_event_name": "BeforeTool",
+        "tool_name": "mcp_agentveil-mcp-proxy_list_workspace",
+        "tool_input": {},
+    },
+}
+
+DESTRUCTIVE_PAYLOADS = {
+    "cursor": {
+        "hook_event": "preToolUse",
+        "tool_name": "Delete",
+        "tool_input": {"path": "note.txt"},
+    },
+    "claude_code": {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/workspace"}},
+    "codex": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf /tmp/workspace"},
+    },
+    "gemini_cli": {
+        "hook_event_name": "BeforeTool",
+        "tool_name": "run_shell_command",
+        "tool_input": {"command": "rm -rf /tmp/workspace"},
+    },
+}
+
+PROCESS_SCENARIOS = (
+    ProcessScenario(
+        "safe_allow",
+        payload=None,
+        publish_binding=False,
+        install_cursor_mcp=False,
+        expect_allow=True,
+        expect_redirect_context=False,
+    ),
+    ProcessScenario(
+        "ready_redirect",
+        payload=None,
+        publish_binding=True,
+        install_cursor_mcp=False,
+        expect_allow=False,
+        expect_redirect_context=True,
+    ),
+    ProcessScenario(
+        "route_unavailable_hard_block",
+        payload=None,
+        publish_binding=False,
+        install_cursor_mcp=False,
+        expect_allow=False,
+        expect_redirect_context=False,
+    ),
+    ProcessScenario(
+        "controlled_mcp_passthrough",
+        payload=None,
+        publish_binding=False,
+        install_cursor_mcp=True,
+        cursor_hook_event="beforeMCPExecution",
+        expect_allow=True,
+        expect_redirect_context=False,
+    ),
+    ProcessScenario(
+        "destructive_hard_block",
+        payload=None,
+        publish_binding=True,
+        install_cursor_mcp=False,
+        expect_allow=False,
+        expect_redirect_context=False,
+        expect_hard_block_copy=True,
+    ),
+)
+
+
+def _scenario_payload(case: InstalledHookCase, scenario: ProcessScenario) -> dict[str, Any]:
+    if scenario.scenario_id == "safe_allow":
+        return SAFE_ALLOW_PAYLOADS[case.connector_id]
+    if scenario.scenario_id == "controlled_mcp_passthrough":
+        return MCP_PASSTHROUGH_PAYLOADS[case.connector_id]
+    if scenario.scenario_id == "destructive_hard_block":
+        return DESTRUCTIVE_PAYLOADS[case.connector_id]
+    return case.hook_payload
+
+
+def _install_cursor_trusted_mcp_route(project: Path, home: Path, tmp_path: Path) -> None:
+    from agentveil_mcp_proxy.cursor_setup import build_mcp_server_entry
+
+    proxy = tmp_path / "bin" / "agentveil-mcp-proxy"
+    proxy.parent.mkdir(parents=True, exist_ok=True)
+    proxy.write_text("#!/bin/sh\n", encoding="utf-8")
+    entry = build_mcp_server_entry(
+        proxy_command=str(proxy),
+        home=home,
+        config_path=home / "mcp-proxy" / "config.json",
+        passphrase_file=home / "passphrase",
+        profile=home / "product-profile",
+        workspace=project,
+    )
+    cursor_dir = project / ".cursor"
+    cursor_dir.mkdir(exist_ok=True)
+    (cursor_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": {cursor_setup.AGENTVEIL_MCP_SERVER_KEY: entry}}),
+        encoding="utf-8",
+    )
+
+
+def _run_installed_hook(command: str, payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        shell=True,
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+
+def _parse_hook_output(case: InstalledHookCase, proc: subprocess.CompletedProcess[str]) -> dict[str, Any] | None:
+    stdout = proc.stdout.strip()
+    if not stdout:
+        return None
+    return json.loads(stdout)
+
+
+def _hook_output_allows(case: InstalledHookCase, proc: subprocess.CompletedProcess[str]) -> bool:
+    if proc.returncode != 0:
+        return False
+    payload = _parse_hook_output(case, proc)
+    if case.connector_id == "cursor":
+        return payload is not None and payload.get("permission") == "allow"
+    if case.connector_id == "gemini_cli":
+        return payload is not None and payload.get("decision") == "allow"
+    return payload is None
+
+
+def _deny_message(case: InstalledHookCase, proc: subprocess.CompletedProcess[str]) -> str:
+    payload = _parse_hook_output(case, proc)
+    if payload is None:
+        return proc.stdout + proc.stderr
+    if case.connector_id == "cursor":
+        return str(payload.get("agent_message") or "")
+    if case.connector_id == "gemini_cli":
+        return str(payload.get("reason") or "")
+    hook_specific = payload.get("hookSpecificOutput") or {}
+    return str(hook_specific.get("permissionDecisionReason") or "")
+
+
 @pytest.mark.parametrize("case", INSTALLED_HOOK_CASES, ids=lambda case: case.connector_id)
 def test_installed_hook_command_includes_home_and_registers_durable_origin(
     tmp_path: Path,
@@ -194,3 +392,50 @@ def test_installed_hook_command_includes_home_and_registers_durable_origin(
         assert "hello" not in json.dumps(meta)
     finally:
         lease.close()
+
+
+@pytest.mark.parametrize("case", INSTALLED_HOOK_CASES, ids=lambda case: case.connector_id)
+@pytest.mark.parametrize("scenario", PROCESS_SCENARIOS, ids=lambda scenario: scenario.scenario_id)
+def test_installed_hook_process_truth_table(
+    tmp_path: Path,
+    case: InstalledHookCase,
+    scenario: ProcessScenario,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    sandbox = project / "sandbox"
+    sandbox.mkdir()
+    home = case.home_for(project)
+    _init_proxy_home(home, sandbox)
+    lease = _publish_live_binding(home, sandbox) if scenario.publish_binding else None
+    try:
+        if case.connector_id == "cursor":
+            command = _install_cursor_command(
+                project,
+                home,
+                hook_event=scenario.cursor_hook_event,
+            )
+        else:
+            command = case.install_command(project, home)
+        assert "--home" in command
+        if scenario.install_cursor_mcp and case.connector_id == "cursor":
+            _install_cursor_trusted_mcp_route(project, home, tmp_path)
+        payload = _scenario_payload(case, scenario)
+        proc = _run_installed_hook(command, payload)
+        assert proc.returncode == 0, proc.stderr
+        assert _hook_output_allows(case, proc) is scenario.expect_allow
+        hook_output = _parse_hook_output(case, proc)
+        redirect_context = case.parse_context(hook_output or {}) if hook_output else None
+        if scenario.expect_redirect_context:
+            assert redirect_context is not None
+            assert redirect_context["redirect_playbook_id"] == "request_approval"
+            meta = durable_original_metadata(home, redirect_context["original_request_id"])
+            assert meta is not None
+            assert meta["redirect_role"] == "original"
+        else:
+            assert redirect_context is None
+        if scenario.expect_hard_block_copy:
+            assert "bounded security reason" in _deny_message(case, proc)
+    finally:
+        if lease is not None:
+            lease.close()

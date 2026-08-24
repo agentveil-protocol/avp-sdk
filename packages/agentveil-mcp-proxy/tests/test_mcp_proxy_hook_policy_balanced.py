@@ -34,15 +34,22 @@ def test_controlled_route_call_passes_through_to_proxy_authority() -> None:
 
 
 def test_native_write_redirect_requires_real_ready_route() -> None:
+    from agentveil_mcp_proxy.hook_policy import resolve_native_hook_disposition_on_deny
+
     evaluation = _evaluation(PolicyDecision.APPROVAL, RiskClass.WRITE)
     assert resolve_hook_disposition(
         evaluation,
         native_write_redirect_supported=True,
         redirect_route_ready=True,
     ) is HookDisposition.REDIRECT
-    assert resolve_hook_disposition(
+    assert resolve_native_hook_disposition_on_deny(
         evaluation,
-        native_write_redirect_supported=True,
+        native_tool="Write",
+        redirect_route_ready=True,
+    ) is HookDisposition.REDIRECT
+    assert resolve_native_hook_disposition_on_deny(
+        evaluation,
+        native_tool="Write",
         redirect_route_ready=False,
     ) is HookDisposition.HARD_BLOCK
 

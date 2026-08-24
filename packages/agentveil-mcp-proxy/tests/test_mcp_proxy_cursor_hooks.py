@@ -22,6 +22,32 @@ from redirect_hook_contract_fixtures import (
 )
 
 
+def _trusted_cursor_mcp_entry(tmp_path: Path, *, workspace: Path | None = None) -> dict:
+    from agentveil_mcp_proxy.cursor_setup import build_mcp_server_entry, setup_home
+
+    ws = workspace or tmp_path
+    home = setup_home(ws)
+    proxy = tmp_path / "bin" / "agentveil-mcp-proxy"
+    proxy.parent.mkdir(parents=True, exist_ok=True)
+    proxy.write_text("#!/bin/sh\n", encoding="utf-8")
+    return build_mcp_server_entry(
+        proxy_command=str(proxy),
+        home=home,
+        config_path=home / "mcp-proxy" / "config.json",
+        passphrase_file=home / "passphrase",
+        profile=home / "product-profile",
+        workspace=ws,
+    )
+
+
+def _write_cursor_mcp_config(workspace: Path, servers: dict) -> None:
+    (workspace / ".cursor").mkdir(exist_ok=True)
+    (workspace / ".cursor" / "mcp.json").write_text(
+        json.dumps({"mcpServers": servers}),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_hook_denied_upload_dedupe() -> None:
     from agentveil_mcp_proxy.console_decision_summary_client import (
@@ -198,10 +224,9 @@ def test_shell_readonly_allowed(tmp_path: Path) -> None:
 
 
 def test_agentveil_mcp_route_passthrough(tmp_path: Path) -> None:
-    (tmp_path / ".cursor").mkdir()
-    (tmp_path / ".cursor" / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"agentveil-mcp-proxy": {"command": "agentveil-mcp-proxy"}}}),
-        encoding="utf-8",
+    _write_cursor_mcp_config(
+        tmp_path,
+        {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: _trusted_cursor_mcp_entry(tmp_path)},
     )
     payload = {
         "hook_event": "beforeMCPExecution",
@@ -215,10 +240,9 @@ def test_agentveil_mcp_route_passthrough(tmp_path: Path) -> None:
 
 
 def test_agentveil_mcp_prefixed_pretooluse_passthrough(tmp_path: Path) -> None:
-    (tmp_path / ".cursor").mkdir()
-    (tmp_path / ".cursor" / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"agentveil-mcp-proxy": {"command": "agentveil-mcp-proxy"}}}),
-        encoding="utf-8",
+    _write_cursor_mcp_config(
+        tmp_path,
+        {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: _trusted_cursor_mcp_entry(tmp_path)},
     )
     payload = {
         "hook_event": "preToolUse",
@@ -230,6 +254,183 @@ def test_agentveil_mcp_prefixed_pretooluse_passthrough(tmp_path: Path) -> None:
     assert decision.hook_action == "allow"
     assert decision.reason_code == "controlled_route_passthrough"
     assert json.loads(out.getvalue())["permission"] == "allow"
+
+
+def test_non_agentveil_mcp_write_denied_with_multi_server_config(tmp_path: Path) -> None:
+    _write_cursor_mcp_config(
+        tmp_path,
+        {
+            cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: _trusted_cursor_mcp_entry(tmp_path),
+            "filesystem": {"command": "filesystem-mcp"},
+        },
+    )
+    payload = {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "filesystem:write_file",
+        "arguments": {"path": "foo.txt", "content": "secret"},
+    }
+    out = StringIO()
+    decision = cursor_hooks.process_hook(payload, workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    response = json.loads(out.getvalue())
+    assert response["permission"] == "deny"
+    assert "secret" not in json.dumps(response)
+    assert "foo.txt" not in json.dumps(response)
+
+
+def test_third_party_mcp_mentioning_agentveil_in_args_denied(tmp_path: Path) -> None:
+    _write_cursor_mcp_config(
+        tmp_path,
+        {"filesystem": {"command": "filesystem-mcp", "args": ["--label", "agentveil"]}},
+    )
+    payload = {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "filesystem:write_file",
+        "arguments": {"path": "foo.txt", "content": "secret"},
+    }
+    out = StringIO()
+    decision = cursor_hooks.process_hook(payload, workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_empty_exact_key_agentveil_entry_denied(tmp_path: Path) -> None:
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: {}})
+    payload = {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "write_file",
+        "arguments": {"path": "foo.txt"},
+    }
+    out = StringIO()
+    decision = cursor_hooks.process_hook(payload, workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_fake_command_under_exact_key_denied(tmp_path: Path) -> None:
+    _write_cursor_mcp_config(
+        tmp_path,
+        {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: {"command": "not-agentveil"}},
+    )
+    payload = {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "write_file",
+        "arguments": {"path": "foo.txt"},
+    }
+    out = StringIO()
+    decision = cursor_hooks.process_hook(payload, workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def _mcp_write_payload() -> dict:
+    return {
+        "hook_event": "beforeMCPExecution",
+        "tool_name": "write_file",
+        "arguments": {"path": "foo.txt"},
+    }
+
+
+def _assert_managed_entry_denied(tmp_path: Path, entry: dict) -> None:
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_wrong_workspace_managed_entry_denied(tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    current = tmp_path / "current"
+    other.mkdir()
+    current.mkdir()
+    entry = _trusted_cursor_mcp_entry(tmp_path, workspace=other)
+    _write_cursor_mcp_config(current, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=current, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_missing_proxy_binary_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    Path(entry["command"]).unlink()
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_tampered_config_path_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    config_idx = entry["args"].index("--config") + 1
+    entry["args"][config_idx] = str(tmp_path / "evil-config.json")
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_tampered_profile_path_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["env"]["PRODUCT_ROUTE_PROFILE_ROOT"] = str(tmp_path / "evil-profile")
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=tmp_path, out=out)
+    assert decision.hook_action == "deny"
+    assert decision.reason_code != "controlled_route_passthrough"
+
+
+def test_agentveil_mcp_exe_basename_passthrough(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    proxy_dir = Path(entry["command"]).parent
+    exe = proxy_dir / "agentveil-mcp-proxy.exe"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    Path(entry["command"]).unlink()
+    entry["command"] = str(exe)
+    _write_cursor_mcp_config(tmp_path, {cursor_hooks.AGENTVEIL_MCP_SERVER_KEY: entry})
+    out = StringIO()
+    decision = cursor_hooks.process_hook(_mcp_write_payload(), workspace=tmp_path, out=out)
+    assert decision.hook_action == "allow"
+    assert decision.reason_code == "controlled_route_passthrough"
+
+
+def test_duplicate_home_arg_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["args"] = [*entry["args"], "--home", entry["env"]["AVP_HOME"]]
+    _assert_managed_entry_denied(tmp_path, entry)
+
+
+def test_duplicate_config_arg_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["args"] = [*entry["args"], "--config", str(tmp_path / "evil.json")]
+    _assert_managed_entry_denied(tmp_path, entry)
+
+
+def test_duplicate_passphrase_arg_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["args"] = [*entry["args"], "--passphrase-file", str(tmp_path / "evil-passphrase")]
+    _assert_managed_entry_denied(tmp_path, entry)
+
+
+def test_trailing_unknown_arg_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["args"] = [*entry["args"], "--evil-flag"]
+    _assert_managed_entry_denied(tmp_path, entry)
+
+
+def test_missing_type_field_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    del entry["type"]
+    _assert_managed_entry_denied(tmp_path, entry)
+
+
+def test_extra_top_level_execution_field_denied(tmp_path: Path) -> None:
+    entry = _trusted_cursor_mcp_entry(tmp_path)
+    entry["cwd"] = str(tmp_path)
+    _assert_managed_entry_denied(tmp_path, entry)
 
 
 def test_evidence_is_bounded(tmp_path: Path) -> None:

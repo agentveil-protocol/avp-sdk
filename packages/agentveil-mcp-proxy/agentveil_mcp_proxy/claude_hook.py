@@ -53,9 +53,13 @@ from agentveil_mcp_proxy.client_guidance import (
     format_native_redirect_agent_surface,
     maybe_register_native_redirect_for_hook_deny,
     native_hook_deny_instruction,
-    native_write_redirect_supported,
 )
-from agentveil_mcp_proxy.hook_policy import HookDisposition, resolve_hook_disposition
+from agentveil_mcp_proxy.hook_policy import (
+    HookDisposition,
+    is_agentveil_controlled_mcp_server,
+    resolve_hook_disposition,
+    resolve_native_hook_disposition_on_deny,
+)
 from agentveil_mcp_proxy.policy import (
     PolicyConfig,
     PolicyDecision,
@@ -341,7 +345,7 @@ def decide(payload: Mapping[str, Any], engine: PolicyEngine) -> HookDecision:
     # through (instead of denying write-shaped MCP tools on this controlled route) so the redirect
     # to "use the controlled MCP tool" is reachable. The proxy, not the hook,
     # then applies approval/redirect/evidence to these calls.
-    if context.server == AGENTVEIL_CONTROLLED_MCP_SERVER:
+    if is_agentveil_controlled_mcp_server(context.server):
         return HookDecision(
             hook_action="allow",
             reason_code="controlled_route_passthrough",
@@ -514,11 +518,9 @@ def process_hook(
         home=home,
     )
     if decision.hook_action == "deny":
-        disposition = resolve_hook_disposition(
+        disposition = resolve_native_hook_disposition_on_deny(
             decision.evaluation,
-            native_write_redirect_supported=native_write_redirect_supported(
-                native_tool=decision.context.tool,
-            ),
+            native_tool=decision.context.tool,
             redirect_route_ready=redirect_origin is not None,
         )
         decision = replace(

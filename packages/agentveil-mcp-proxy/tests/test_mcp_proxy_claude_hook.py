@@ -814,6 +814,7 @@ def test_claude_hook_denies_broad_git_add_end_to_end() -> None:
     "tool_name,tool_input",
     [
         (f"mcp__{AGENTVEIL_CONTROLLED_MCP_SERVER}__write_file", {"path": "/x", "content": "y"}),
+        ("mcp__agentveil_mcp_proxy__write_file", {"path": "/x", "content": "y"}),
         (f"mcp__{AGENTVEIL_CONTROLLED_MCP_SERVER}__delete_file", {"path": "/x"}),
         (f"mcp__{AGENTVEIL_CONTROLLED_MCP_SERVER}__move_file", {"src": "/a", "dst": "/b"}),
         (f"mcp__{AGENTVEIL_CONTROLLED_MCP_SERVER}__list_workspace", {}),
