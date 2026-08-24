@@ -4,7 +4,7 @@
 
 # AgentVeil
 
-[![PyPI](https://img.shields.io/badge/PyPI-0.7.30-blue)](https://pypi.org/project/agentveil-mcp-proxy/0.7.30/)
+[![PyPI](https://img.shields.io/pypi/v/agentveil-mcp-proxy?label=agentveil-mcp-proxy)](https://pypi.org/project/agentveil-mcp-proxy/)
 [![Python](https://img.shields.io/pypi/pyversions/agentveil-mcp-proxy)](https://pypi.org/project/agentveil-mcp-proxy/)
 [![Tests](https://github.com/agentveil-protocol/agentveil-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/agentveil-protocol/agentveil-sdk/actions)
 [![SDK License: MIT](https://img.shields.io/badge/SDK-MIT-informational)](LICENSING.md)
@@ -26,7 +26,7 @@ proof.
 pip install agentveil-mcp-proxy
 ```
 
-**Proxy PyPI**: [agentveil-mcp-proxy](https://pypi.org/project/agentveil-mcp-proxy/) | **Website**: [agentveil.dev](https://agentveil.dev) | **Package source**: [`packages/agentveil-mcp-proxy/`](packages/agentveil-mcp-proxy/)
+**Packages**: [agentveil-mcp-proxy](https://pypi.org/project/agentveil-mcp-proxy/) · [agentveil](https://pypi.org/project/agentveil/) | **Website**: [agentveil.dev](https://agentveil.dev) | **Package source**: [`packages/agentveil-mcp-proxy/`](packages/agentveil-mcp-proxy/)
 
 > **Agent action boundary:** AI runtimes execute agents. AgentVeil mediates
 > configured action paths around them. When a native or risky action hits the
