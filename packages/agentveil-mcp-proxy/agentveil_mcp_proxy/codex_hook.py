@@ -338,10 +338,11 @@ def process_hook(
     if evidence_path is not None:
         write_evidence(record, evidence_path)
     if decision.hook_action == "deny":
-        if detached_upload:
-            best_effort_spawn_hook_denied_summary(record, runtime_home=home)
-        else:
-            best_effort_upload_hook_denied_summary(record, home=home)
+        if decision.disposition is HookDisposition.HARD_BLOCK:
+            if detached_upload:
+                best_effort_spawn_hook_denied_summary(record, runtime_home=home)
+            else:
+                best_effort_upload_hook_denied_summary(record, home=home)
     if detached_upload:
         best_effort_spawn_hook_project_status(
             connector="codex",

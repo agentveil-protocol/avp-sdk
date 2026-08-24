@@ -559,6 +559,89 @@ def test_cursor_hook_denied_uploads_bounded_decision_summary(monkeypatch, tmp_pa
     assert "foo.txt" not in encoded
 
 
+def test_cursor_hook_redirect_does_not_upload_decision_summary(monkeypatch, tmp_path: Path) -> None:
+    from agentveil_mcp_proxy.console_credentials import CREDENTIAL_SCOPE, StoredCredential
+    from agentveil_mcp_proxy.console_decision_summary_client import (
+        wait_for_hook_denied_uploads_for_tests,
+    )
+
+    uploads = []
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.load_credential",
+        lambda home=None: StoredCredential(
+            scope=CREDENTIAL_SCOPE,
+            token="hook-upload-token-secret",
+        ),
+    )
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.sync_decision_summary",
+        lambda payload, **kwargs: uploads.append(payload) or "accepted",
+    )
+    home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
+    fixture = publish_live_hook_binding(home, downstream=downstream)
+    try:
+        out = StringIO()
+        decision = cursor_hooks.process_hook(
+            {
+                "hook_event": "preToolUse",
+                "tool_name": "Write",
+                "tool_input": {"path": "note.txt", "contents": "hello"},
+            },
+            workspace=tmp_path,
+            home=home,
+            out=out,
+        )
+        assert decision.reason_code == "managed_route_redirect"
+        assert wait_for_hook_denied_uploads_for_tests()
+        assert uploads == []
+    finally:
+        fixture.lease.close()
+
+
+def test_cursor_hook_hard_block_still_uploads_with_live_binding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from agentveil_mcp_proxy.console_credentials import CREDENTIAL_SCOPE, StoredCredential
+    from agentveil_mcp_proxy.console_decision_summary_client import (
+        wait_for_hook_denied_uploads_for_tests,
+    )
+
+    uploads = []
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.load_credential",
+        lambda home=None: StoredCredential(
+            scope=CREDENTIAL_SCOPE,
+            token="hook-upload-token-secret",
+        ),
+    )
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.sync_decision_summary",
+        lambda payload, **kwargs: uploads.append(payload) or "accepted",
+    )
+    home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
+    fixture = publish_live_hook_binding(home, downstream=downstream)
+    try:
+        out = StringIO()
+        decision = cursor_hooks.process_hook(
+            {
+                "hook_event": "preToolUse",
+                "tool_name": "Delete",
+                "tool_input": {"path": "note.txt"},
+            },
+            workspace=tmp_path,
+            home=home,
+            out=out,
+        )
+        assert decision.reason_code == "risky_blocked"
+        assert decision.disposition.value == "hard_block"
+        assert wait_for_hook_denied_uploads_for_tests()
+        assert len(uploads) == 1
+        assert uploads[0].decision == "denied"
+    finally:
+        fixture.lease.close()
+
+
 @pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
 def test_cursor_shell_classifier_matches_shared_matrix(command: str, expected: RiskClass) -> None:
     assert (

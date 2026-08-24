@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -375,6 +376,28 @@ def test_codex_hook_allow_does_not_upload_decision_summary(monkeypatch):
 
     assert decision.hook_action == "allow"
     assert uploads == []
+
+
+def test_codex_hook_redirect_does_not_upload_decision_summary(monkeypatch, tmp_path: Path) -> None:
+    from agentveil_mcp_proxy.console_decision_summary_client import (
+        wait_for_hook_denied_uploads_for_tests,
+    )
+
+    uploads, _payload_to_request_body = _install_hook_upload_capture(monkeypatch)
+    home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
+    fixture = publish_live_hook_binding(home, downstream=downstream)
+    try:
+        out = io.StringIO()
+        decision = codex_hook.process_hook(
+            _payload("Write", {"file_path": "note.txt", "content": "hello"}),
+            home=home,
+            out=out,
+        )
+        assert decision.reason_code == "managed_route_redirect"
+        assert wait_for_hook_denied_uploads_for_tests()
+        assert uploads == []
+    finally:
+        fixture.lease.close()
 
 
 def test_codex_hook_denied_remains_denied_when_upload_fails(monkeypatch):
