@@ -20,7 +20,6 @@ from typing import Any, Mapping
 
 from agentveil_mcp_proxy.classification import infer_action_family, infer_risk_class
 from agentveil_mcp_proxy.claude_hook import (
-    AGENTVEIL_CONTROLLED_MCP_SERVER,
     _bounded_input_ref,
     _classify_bash,
 )
@@ -36,9 +35,14 @@ from agentveil_mcp_proxy.client_guidance import (
     format_native_redirect_agent_surface,
     maybe_register_native_redirect_for_hook_deny,
     native_hook_deny_instruction,
-    native_write_redirect_supported,
 )
-from agentveil_mcp_proxy.hook_policy import HookDisposition, resolve_hook_disposition
+from agentveil_mcp_proxy.hook_policy import (
+    AGENTVEIL_CONTROLLED_MCP_SERVER_ALIASES,
+    HookDisposition,
+    is_agentveil_controlled_mcp_server,
+    resolve_hook_disposition,
+    resolve_native_hook_disposition_on_deny,
+)
 from agentveil_mcp_proxy.policy import (
     PolicyDecision,
     PolicyEngine,
@@ -51,10 +55,6 @@ from agentveil_mcp_proxy.policy import (
 
 GEMINI_SERVER_LABEL = "gemini_cli"
 HOOK_EVENT_DEFAULT = "BeforeTool"
-AGENTVEIL_CONTROLLED_MCP_SERVER_ALIASES = {
-    AGENTVEIL_CONTROLLED_MCP_SERVER,
-    AGENTVEIL_CONTROLLED_MCP_SERVER.replace("-", "_"),
-}
 
 _GEMINI_NATIVE_RISK: Mapping[str, RiskClass] = {
     "write_file": RiskClass.WRITE,
@@ -154,10 +154,6 @@ def build_tool_call_context(payload: Mapping[str, Any]) -> ToolCallContext:
     )
 
 
-def _is_agentveil_controlled_mcp_server(server: str) -> bool:
-    return server in AGENTVEIL_CONTROLLED_MCP_SERVER_ALIASES
-
-
 def default_proxy_config_for_hook() -> ProxyConfig:
     return ProxyConfig.from_dict({
         "proxy_config_schema_version": 1,
@@ -234,7 +230,7 @@ def _reason_code(evaluation: PolicyEvaluation, hook_action: str) -> str:
 def decide(payload: Mapping[str, Any], engine: PolicyEngine) -> HookDecision:
     context = build_tool_call_context(payload)
     evaluation = engine.evaluate(context)
-    if _is_agentveil_controlled_mcp_server(context.server):
+    if is_agentveil_controlled_mcp_server(context.server):
         return HookDecision(
             hook_action="allow",
             reason_code="controlled_route_passthrough",
@@ -344,11 +340,9 @@ def process_hook(
         home=home,
     )
     if decision.hook_action == "deny":
-        disposition = resolve_hook_disposition(
+        disposition = resolve_native_hook_disposition_on_deny(
             decision.evaluation,
-            native_write_redirect_supported=native_write_redirect_supported(
-                native_tool=decision.context.tool,
-            ),
+            native_tool=decision.context.tool,
             redirect_route_ready=redirect_origin is not None,
         )
         decision = replace(
@@ -360,10 +354,11 @@ def process_hook(
     if evidence_path is not None:
         write_evidence(record, evidence_path)
     if decision.hook_action == "deny":
-        if detached_upload:
-            best_effort_spawn_hook_denied_summary(record, runtime_home=home)
-        else:
-            best_effort_upload_hook_denied_summary(record, home=home)
+        if decision.disposition is HookDisposition.HARD_BLOCK:
+            if detached_upload:
+                best_effort_spawn_hook_denied_summary(record, runtime_home=home)
+            else:
+                best_effort_upload_hook_denied_summary(record, home=home)
     if detached_upload:
         best_effort_spawn_hook_project_status(
             connector="gemini-cli",

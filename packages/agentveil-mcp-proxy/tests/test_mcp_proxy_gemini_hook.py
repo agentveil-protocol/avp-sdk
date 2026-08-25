@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
 from agentveil_mcp_proxy import gemini_hook
+from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_gemini_hook_output
+from agentveil_mcp_proxy.gemini_hook import classify_gemini_tool
+from agentveil_mcp_proxy.policy import RiskClass
+from redirect_hook_contract_fixtures import (
+    durable_original_metadata,
+    init_redirect_contract_home,
+    publish_live_hook_binding,
+)
+from test_mcp_proxy_classification import NATIVE_SHELL_COMMAND_MATRIX
 
 
 @pytest.fixture(autouse=True)
@@ -231,14 +241,6 @@ def test_gemini_hook_does_not_leak_raw_command_in_evidence(tmp_path):
     assert secret_command not in json.dumps(record)
 
 
-from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_gemini_hook_output
-from redirect_hook_contract_fixtures import (
-    durable_original_metadata,
-    init_redirect_contract_home,
-    publish_live_hook_binding,
-)
-
-
 def test_gemini_native_write_file_registers_durable_origin_and_agent_surface_context(tmp_path):
     home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
     fixture = publish_live_hook_binding(home, downstream=downstream)
@@ -323,3 +325,42 @@ def test_gemini_hook_denied_uploads_bounded_decision_summary(monkeypatch):
     encoded = json.dumps(payload_to_request_body(uploads[0]))
     assert "SECRET_CONTENT" not in encoded
     assert "owned.txt" not in encoded
+
+
+def test_gemini_hook_redirect_does_not_upload_decision_summary(monkeypatch, tmp_path: Path) -> None:
+    from agentveil_mcp_proxy.console_credentials import CREDENTIAL_SCOPE, StoredCredential
+    from agentveil_mcp_proxy.console_decision_summary_client import (
+        wait_for_hook_denied_uploads_for_tests,
+    )
+
+    uploads = []
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.load_credential",
+        lambda home=None: StoredCredential(
+            scope=CREDENTIAL_SCOPE,
+            token="hook-upload-token-secret",
+        ),
+    )
+    monkeypatch.setattr(
+        "agentveil_mcp_proxy.console_decision_summary_client.sync_decision_summary",
+        lambda payload, **kwargs: uploads.append(payload) or "accepted",
+    )
+    home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
+    fixture = publish_live_hook_binding(home, downstream=downstream)
+    try:
+        out = io.StringIO()
+        decision = gemini_hook.process_hook(
+            _payload("write_file", {"path": "note.txt", "content": "hello"}),
+            home=home,
+            out=out,
+        )
+        assert decision.reason_code == "managed_route_redirect"
+        assert wait_for_hook_denied_uploads_for_tests()
+        assert uploads == []
+    finally:
+        fixture.lease.close()
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
+def test_gemini_shell_classifier_matches_shared_matrix(command: str, expected: RiskClass) -> None:
+    assert classify_gemini_tool("run_shell_command", {"command": command}) is expected

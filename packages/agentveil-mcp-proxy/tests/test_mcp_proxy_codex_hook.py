@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
 from agentveil_mcp_proxy import codex_hook
+from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_codex_hook_output
+from agentveil_mcp_proxy.codex_hook import classify_codex_tool
+from agentveil_mcp_proxy.policy import RiskClass
+from redirect_hook_contract_fixtures import (
+    durable_original_metadata,
+    init_redirect_contract_home,
+    publish_live_hook_binding,
+)
+from test_mcp_proxy_classification import NATIVE_SHELL_COMMAND_MATRIX
 
 
 @pytest.fixture(autouse=True)
@@ -216,14 +226,6 @@ def test_codex_hook_accepts_camel_case_payload_shape():
     assert "Direct native file mutation was blocked before mutation" in reason
 
 
-from agentveil_mcp_proxy.client_guidance import parse_redirect_context_from_codex_hook_output
-from redirect_hook_contract_fixtures import (
-    durable_original_metadata,
-    init_redirect_contract_home,
-    publish_live_hook_binding,
-)
-
-
 def test_codex_native_write_registers_durable_origin_and_agent_surface_context(tmp_path):
     home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
     fixture = publish_live_hook_binding(home, downstream=downstream)
@@ -376,6 +378,28 @@ def test_codex_hook_allow_does_not_upload_decision_summary(monkeypatch):
     assert uploads == []
 
 
+def test_codex_hook_redirect_does_not_upload_decision_summary(monkeypatch, tmp_path: Path) -> None:
+    from agentveil_mcp_proxy.console_decision_summary_client import (
+        wait_for_hook_denied_uploads_for_tests,
+    )
+
+    uploads, _payload_to_request_body = _install_hook_upload_capture(monkeypatch)
+    home, _sandbox, downstream = init_redirect_contract_home(tmp_path)
+    fixture = publish_live_hook_binding(home, downstream=downstream)
+    try:
+        out = io.StringIO()
+        decision = codex_hook.process_hook(
+            _payload("Write", {"file_path": "note.txt", "content": "hello"}),
+            home=home,
+            out=out,
+        )
+        assert decision.reason_code == "managed_route_redirect"
+        assert wait_for_hook_denied_uploads_for_tests()
+        assert uploads == []
+    finally:
+        fixture.lease.close()
+
+
 def test_codex_hook_denied_remains_denied_when_upload_fails(monkeypatch):
     from agentveil_mcp_proxy.console_decision_summary_client import (
         DecisionSummaryClientError,
@@ -398,3 +422,8 @@ def test_codex_hook_denied_remains_denied_when_upload_fails(monkeypatch):
     assert decision.hook_action == "deny"
     assert wait_for_hook_denied_uploads_for_tests()
     assert _deny_reason(out.getvalue())
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
+def test_codex_shell_classifier_matches_shared_matrix(command: str, expected: RiskClass) -> None:
+    assert classify_codex_tool("Bash", {"command": command}) is expected

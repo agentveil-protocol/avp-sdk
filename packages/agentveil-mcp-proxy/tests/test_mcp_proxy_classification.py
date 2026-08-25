@@ -846,3 +846,112 @@ def test_apply_patch_controlled_tool_is_a_filesystem_write() -> None:
         )
         is RiskClass.WRITE
     )
+
+
+# ----- shared native shell command matrix (H1 rebaseline) -------------------
+
+
+NATIVE_SHELL_COMMAND_MATRIX: tuple[tuple[str, RiskClass], ...] = (
+    # allow: bounded local read / inspect / test / lint
+    ("sed -n '1,40p' README.md", RiskClass.READ),
+    ("rg --files packages/agentveil-mcp-proxy", RiskClass.READ),
+    ("git status", RiskClass.READ),
+    ("git status --short", RiskClass.READ),
+    ("git diff --check", RiskClass.READ),
+    ("git add src/foo.py tests/bar.py", RiskClass.READ),
+    ("git commit -m 'slice'", RiskClass.READ),
+    ("git switch feature", RiskClass.READ),
+    ("git switch -c feature", RiskClass.READ),
+    ("pytest -q packages/agentveil-mcp-proxy/tests", RiskClass.READ),
+    ("ruff check packages/agentveil-mcp-proxy", RiskClass.READ),
+    ("alembic heads", RiskClass.READ),
+    ("agentveil-mcp-proxy --help", RiskClass.READ),
+    ("agentveil-mcp-proxy --version", RiskClass.READ),
+    ("agentveil-mcp-proxy setup status", RiskClass.READ),
+    ("agentveil-mcp-proxy setup status --client codex --json", RiskClass.READ),
+    ("agentveil-mcp-proxy events --help", RiskClass.READ),
+    ("git status --short && git diff --check", RiskClass.READ),
+    ("agentveil-mcp-proxy --version && agentveil-mcp-proxy setup status --client codex --json", RiskClass.READ),
+    ("PYTHONPATH=.:packages/agentveil-mcp-proxy pytest -q packages/agentveil-mcp-proxy/tests", RiskClass.READ),
+    ("python3 -m pytest -q packages/agentveil-mcp-proxy/tests", RiskClass.READ),
+    # read-only remote git diagnostics
+    ("git ls-remote origin HEAD", RiskClass.READ),
+    ("git ls-remote upstream refs/heads/main", RiskClass.READ),
+    ("git ls-remote --heads origin", RiskClass.READ),
+    ("git ls-remote attacker HEAD", RiskClass.UNKNOWN),
+    ("git ls-remote evil refs/heads/main", RiskClass.UNKNOWN),
+    ("git ls-remote https://attacker.invalid/r HEAD", RiskClass.UNKNOWN),
+    ("git ls-remote file:///etc HEAD", RiskClass.UNKNOWN),
+    ("git ls-remote --upload-pack=x origin HEAD", RiskClass.UNKNOWN),
+    ("git ls-remote --exec=x origin HEAD", RiskClass.UNKNOWN),
+    ("GIT_SSH_COMMAND=x git ls-remote origin HEAD", RiskClass.UNKNOWN),
+    ("GIT_SSH=x git ls-remote origin HEAD", RiskClass.UNKNOWN),
+    ("GIT_CONFIG_COUNT=1 git ls-remote origin HEAD", RiskClass.UNKNOWN),
+    ("LC_ALL=C git ls-remote origin HEAD", RiskClass.UNKNOWN),
+    # write / gated (non-read; controlled-route candidates for H2)
+    ("git add .", RiskClass.WRITE),
+    ("git add -A", RiskClass.WRITE),
+    ("git commit --amend -m fix", RiskClass.WRITE),
+    ("git checkout -- file.txt", RiskClass.WRITE),
+    ("ruff check --fix packages/agentveil-mcp-proxy", RiskClass.WRITE),
+    ("ruff format packages/agentveil-mcp-proxy", RiskClass.WRITE),
+    ("alembic upgrade head", RiskClass.WRITE),
+    ("python -m pip install foo", RiskClass.WRITE),
+    ("git status > out.txt", RiskClass.WRITE),
+    # Remote mutation negative-test boundary.
+    ("git fetch origin", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+    ("git pull origin main", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+    ("git push origin main", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+    ("git tag v1.0.0", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+    # destructive / secret / credential
+    ("git reset --hard", RiskClass.DESTRUCTIVE),
+    ("git clean -fd", RiskClass.DESTRUCTIVE),
+    ("git status && git reset --hard", RiskClass.DESTRUCTIVE),
+    ("cat .env", RiskClass.DESTRUCTIVE),
+    ("cat ~/.ssh/id_rsa", RiskClass.DESTRUCTIVE),
+    ("AWS_SECRET_ACCESS_KEY=x pytest -q t", RiskClass.DESTRUCTIVE),
+    # fail-closed unknown / unsupported
+    ("python3 -c \"print('x')\"", RiskClass.UNKNOWN),
+    ("cat <<EOF\nx\nEOF", RiskClass.UNKNOWN),
+    ("git status | tee status.txt", RiskClass.UNKNOWN),
+    ("ls | grep foo", RiskClass.UNKNOWN),
+    ("unknown-tool --flag", RiskClass.UNKNOWN),
+)
+
+
+NATIVE_SHELL_NEIGHBOR_MATRIX: tuple[tuple[str, RiskClass], ...] = (
+    ("git ls-remote origin", RiskClass.READ),
+    ("git fetch origin", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+    ("agentveil-mcp-proxy --help", RiskClass.READ),
+    ("agentveil-mcp-proxy -h", RiskClass.READ),
+    ("agentveil-mcp-proxy not-a-command", RiskClass.UNKNOWN),
+    ("sed -n '1,40p' README.md", RiskClass.READ),
+    ("sed -i '' README.md", RiskClass.WRITE),
+    ("git status && git diff --check", RiskClass.READ),
+    ("git status && git push origin main", RiskClass.PRODUCTION),  # claim-check: allow negative classifier assertion.
+)
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_COMMAND_MATRIX)
+def test_native_shell_command_matrix(command: str, expected: RiskClass) -> None:
+    from agentveil_mcp_proxy.classification import classify_native_shell_command
+
+    assert classify_native_shell_command(command) is expected
+
+
+@pytest.mark.parametrize("command,expected", NATIVE_SHELL_NEIGHBOR_MATRIX)
+def test_native_shell_neighbor_matrix(command: str, expected: RiskClass) -> None:
+    from agentveil_mcp_proxy.classification import classify_native_shell_command
+
+    assert classify_native_shell_command(command) is expected
+
+
+def test_native_shell_matrix_privacy_deny_cases_do_not_echo_secret_operands() -> None:
+    from agentveil_mcp_proxy.classification import classify_native_shell_command
+
+    secret = "SUPER_SECRET_TOKEN_VALUE"
+    command = f"cat .env.{secret}"
+    risk = classify_native_shell_command(command)
+    assert risk is RiskClass.DESTRUCTIVE
+    assert secret not in repr(risk)
+    assert secret not in risk.value

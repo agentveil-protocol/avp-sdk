@@ -1127,6 +1127,69 @@ def test_build_hook_denied_decision_summary_payload_skips_allow():
     )
 
 
+def test_build_hook_denied_decision_summary_payload_maps_inconsistent_redirect_reason():
+    payload = build_hook_denied_decision_summary_payload(
+        _hook_denied_record(
+            reason_code="managed_route_redirect",
+            policy_decision="block",
+            risk_class="destructive",
+            tool="Delete",
+            tool_name="Delete",
+            action_family="delete",
+        )
+    )
+    assert payload is not None
+    assert payload.decision == "denied"
+
+
+def test_hook_denied_upload_maps_inconsistent_redirect_reason_transport():
+    calls: list[str] = []
+
+    def _upload(payload, **kwargs):
+        calls.append(payload.event_id)
+        return "accepted"
+
+    record = _hook_denied_record(
+        session_id="inconsistent-redirect-reason-session",
+        reason_code="managed_route_redirect",
+        policy_decision="block",
+        risk_class="destructive",
+        tool="Delete",
+        tool_name="Delete",
+        action_family="delete",
+    )
+    best_effort_upload_hook_denied_summary(record, upload_fn=_upload)
+    _wait_hook_denied_uploads()
+    assert len(calls) == 1
+
+
+def test_build_hook_denied_decision_summary_payload_maps_risky_blocked():
+    payload = build_hook_denied_decision_summary_payload(
+        _hook_denied_record(reason_code="risky_blocked")
+    )
+    assert payload is not None
+    assert payload.decision == "denied"
+
+
+def test_hook_denied_upload_still_uploads_risky_blocked_for_write_tool():
+    calls: list[str] = []
+
+    def _upload(payload, **kwargs):
+        calls.append(payload.event_id)
+        return "accepted"
+
+    record = _hook_denied_record(
+        session_id="hard-block-write-session",
+        reason_code="risky_blocked",
+        tool="Write",
+        tool_name="Write",
+        action_family="write",
+    )
+    best_effort_upload_hook_denied_summary(record, upload_fn=_upload)
+    _wait_hook_denied_uploads()
+    assert len(calls) == 1
+
+
 def test_build_hook_denied_decision_summary_payload_infers_action_family_from_tool():
     payload = build_hook_denied_decision_summary_payload(
         _hook_denied_record(action_family="", tool="write_file", tool_name="write_file")
